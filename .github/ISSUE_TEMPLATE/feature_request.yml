@@ -1,0 +1,29 @@
+name: 产品建议
+description: 描述新的使用场景或改进方向
+title: "[Idea] "
+labels: [enhancement]
+body:
+  - type: textarea
+    id: scenario
+    attributes:
+      label: 使用场景
+      description: 谁在什么情况下遇到了什么问题？
+    validations:
+      required: true
+  - type: textarea
+    id: current
+    attributes:
+      label: 目前如何解决
+    validations:
+      required: true
+  - type: textarea
+    id: outcome
+    attributes:
+      label: 希望得到的结果
+      description: 优先描述结果，不必先限定具体实现。
+    validations:
+      required: true
+  - type: textarea
+    id: notes
+    attributes:
+      label: 补充信息

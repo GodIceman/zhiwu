@@ -1,0 +1,58 @@
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+node_modules
+.npm-cache/
+.npmrc
+dist
+dist-ssr
+*.local
+
+# Local toolchains and generated artifacts
+.tools/
+.playwright-cli/
+.codex-remote-attachments/
+test-results/
+playwright-report/
+coverage/
+backups/
+audit/
+visual-explorations/
+design/
+design-qa.md
+
+# Local previews and release binaries
+.preview-*
+*.apk
+*.aab
+*.zip
+
+# Secrets and signing material
+.env
+.env.*
+!.env.example
+*.jks
+*.keystore
+*.p12
+*.pem
+keystore.properties
+android/key.properties
+android/app/google-services.json
+
+# Editor directories and files
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store
+Thumbs.db
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?

@@ -1,0 +1,15 @@
+<svg
+  xmlns="http://www.w3.org/2000/svg"
+  width="48"
+  height="48"
+  viewBox="0 0 48 48"
+  fill="none"
+  stroke="#000"
+  stroke-width="3"
+  stroke-linecap="round"
+  stroke-linejoin="round"
+  shape-rendering="geometricPrecision"
+>
+  <path d="M27 31V8.5c6.6 1.2 10.5 5.7 9.1 12.3"/>
+  <ellipse cx="20.5" cy="33.8" rx="6.6" ry="4.8" transform="rotate(-22 20.5 33.8)"/>
+</svg>

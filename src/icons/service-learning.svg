@@ -1,0 +1,16 @@
+<svg
+  xmlns="http://www.w3.org/2000/svg"
+  width="48"
+  height="48"
+  viewBox="0 0 48 48"
+  fill="none"
+  stroke="#000"
+  stroke-width="3"
+  stroke-linecap="round"
+  stroke-linejoin="round"
+  shape-rendering="geometricPrecision"
+>
+  <path d="M4.5 17 24 7l19.5 10L24 27 4.5 17Z"/>
+  <path d="M12 22.5V32c0 4.5 5.5 8 12 8s12-3.5 12-8v-9.5"/>
+  <path d="M40 19v8"/>
+</svg>

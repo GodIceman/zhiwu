@@ -1,0 +1,17 @@
+<svg
+  xmlns="http://www.w3.org/2000/svg"
+  width="48"
+  height="48"
+  viewBox="0 0 48 48"
+  fill="none"
+  stroke="#000"
+  stroke-width="3"
+  stroke-linecap="round"
+  stroke-linejoin="round"
+  shape-rendering="geometricPrecision"
+>
+  <circle cx="24" cy="24" r="16.5"/>
+  <circle cx="16" cy="24" r="1.7" fill="#000" stroke="none"/>
+  <circle cx="24" cy="24" r="1.7" fill="#000" stroke="none"/>
+  <circle cx="32" cy="24" r="1.7" fill="#000" stroke="none"/>
+</svg>
