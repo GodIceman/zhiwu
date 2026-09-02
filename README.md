@@ -9,7 +9,7 @@
   </p>
   <p>
     <a href="https://godiceman.github.io/zhiwu/">在线体验</a> ·
-    <a href="https://github.com/GodIceman/zhiwu/releases">Android 下载</a> ·
+    <a href="https://github.com/GodIceman/zhiwu/releases">版本发布</a> ·
     <a href="CHANGELOG.md">更新日志</a>
   </p>
 </div>

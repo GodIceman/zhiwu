@@ -9,7 +9,7 @@
   </p>
   <p>
     <a href="https://godiceman.github.io/zhiwu/">Live Demo</a> ·
-    <a href="https://github.com/GodIceman/zhiwu/releases">Android</a> ·
+    <a href="https://github.com/GodIceman/zhiwu/releases">Releases</a> ·
     <a href="CHANGELOG.md">Changelog</a>
   </p>
 </div>
