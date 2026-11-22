@@ -86,6 +86,27 @@ export function ItemCategoryGlyph({
   )
 }
 
+export function CustomKindGlyph({
+  name,
+  variant = 'compact',
+}: {
+  name: string
+  variant?: CategoryGlyphVariant
+}) {
+  const text = (name.normalize('NFC').match(/[\p{L}\p{N}]/gu) ?? []).slice(0, 2).join('') || '物'
+  const style = { '--custom-glyph-size': `${categoryGlyphSizes[variant]}px` } as CSSProperties
+
+  return (
+    <span
+      className={`custom-kind-glyph${Array.from(text).length === 1 ? ' single-character' : ''}`}
+      style={style}
+      aria-hidden="true"
+    >
+      {text}
+    </span>
+  )
+}
+
 export function ServiceCategoryGlyph({
   category,
   variant = 'compact',

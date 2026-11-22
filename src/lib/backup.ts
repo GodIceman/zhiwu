@@ -1,5 +1,6 @@
-import type { Asset, BackupPayload, Settings } from '../types'
+import { getCategoryDisplayName, normalizeCategoryPair, type Asset, type BackupPayload, type Settings } from '../types'
 import { normalizeAsset } from './asset-normalization'
+import { normalizeCustomSubcategories } from './custom-subcategories'
 import { defaultSettings } from './settings-defaults'
 
 export function createBackup(assets: Asset[], settings: Settings): BackupPayload {
@@ -22,10 +23,74 @@ export function parseBackup(raw: unknown) {
     throw new Error('导入文件版本不支持')
   }
 
+  const ids = new Set<string>()
+  payload.assets.forEach((value, index) => {
+    const label = `第 ${index + 1} 条记录`
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+      throw new Error(`${label}格式不正确，未导入任何数据`)
+    }
+    const asset = value as Record<string, unknown>
+    if (typeof asset.id !== 'string' || !asset.id.trim() || ids.has(asset.id)) {
+      throw new Error(`${label}的标识缺失或重复，未导入任何数据`)
+    }
+    ids.add(asset.id)
+    if (typeof asset.name !== 'string' || !asset.name.trim()) {
+      throw new Error(`${label}的名称缺失，未导入任何数据`)
+    }
+    if (asset.kind !== undefined && asset.kind !== 'item' && asset.kind !== 'service') {
+      throw new Error(`${label}的类型不受支持，未导入任何数据`)
+    }
+    for (const field of ['valueTrackingEnabled', 'autoRenew'] as const) {
+      if (asset[field] !== undefined && typeof asset[field] !== 'boolean') {
+        throw new Error(`${label}的设置无效，未导入任何数据`)
+      }
+    }
+    const amountField = asset.kind === 'service' ? 'serviceAmountCny' : 'purchasePriceCny'
+    if (asset[amountField] === undefined) {
+      throw new Error(`${label}的金额缺失，未导入任何数据`)
+    }
+    for (const field of ['purchasePriceCny', 'serviceAmountCny'] as const) {
+      const amount = asset[field]
+      if (amount !== undefined && (typeof amount !== 'number' || !Number.isFinite(amount) || amount < 0)) {
+        throw new Error(`${label}的金额无效，未导入任何数据`)
+      }
+    }
+    for (const field of ['purchaseDate', 'nextEventDate'] as const) {
+      const date = asset[field]
+      if (date !== undefined && date !== '' && !isValidDate(date)) {
+        throw new Error(`${label}的日期无效，未导入任何数据`)
+      }
+    }
+  })
+
+  if (payload.settings !== undefined && payload.settings !== null) {
+    if (typeof payload.settings !== 'object' || Array.isArray(payload.settings)) {
+      throw new Error('备份中的设置格式不正确，未导入任何数据')
+    }
+    const settings = payload.settings as Record<string, unknown>
+    if (settings.customSubcategories !== undefined && (
+      !Array.isArray(settings.customSubcategories) || settings.customSubcategories.some((item: unknown) =>
+        !item || typeof item !== 'object' || Array.isArray(item)
+        || typeof (item as Record<string, unknown>).category !== 'string'
+        || typeof (item as Record<string, unknown>).name !== 'string'
+        || ((item as Record<string, unknown>).emoji !== undefined
+          && typeof (item as Record<string, unknown>).emoji !== 'string'),
+      )
+    )) {
+      throw new Error('备份中的自定义分类格式不正确，未导入任何数据')
+    }
+  }
+
   return {
     assets: payload.assets.map((asset) => normalizeAsset(asset as Partial<Asset>)),
     settings: normalizeImportedSettings(payload.settings),
   }
+}
+
+function isValidDate(value: unknown) {
+  if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false
+  const date = new Date(`${value}T00:00:00Z`)
+  return Number.isFinite(date.getTime()) && date.toISOString().slice(0, 10) === value
 }
 
 function normalizeImportedSettings(settings: unknown): Settings {
@@ -39,7 +104,7 @@ function normalizeImportedSettings(settings: unknown): Settings {
     dailyCostMode: raw.dailyCostMode === 'elapsed' ? 'elapsed' : 'inclusive',
     theme: raw.theme === 'light' || raw.theme === 'dark' ? raw.theme : 'system',
     hasSeededDemoData: true,
-    customSubcategories: Array.isArray(raw.customSubcategories) ? raw.customSubcategories : [],
+    customSubcategories: normalizeCustomSubcategories(raw.customSubcategories),
   }
 }
 
@@ -61,7 +126,8 @@ export function buildCsv(assets: Asset[]) {
   const rows = assets.map((asset) => [
     asset.kind === 'service' ? '服务' : '物品',
     asset.name,
-    asset.kind === 'service' ? asset.serviceCategory : asset.category,
+    asset.kind === 'service' ? asset.serviceCategory
+      : getCategoryDisplayName(normalizeCategoryPair(asset.category, asset.subcategory).category),
     asset.kind === 'service' ? asset.planName : asset.subcategory,
     asset.kind === 'service' ? '' : asset.valueTrackingEnabled ? '是' : '否',
     String(asset.kind === 'service' ? asset.serviceAmountCny ?? 0 : asset.purchasePriceCny),

@@ -1,8 +1,7 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 48 48" fill="none" stroke="#000" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" shape-rendering="geometricPrecision">
-  <circle cx="24" cy="20" r="14"/>
-  <circle cx="24" cy="20" r="2.5"/>
-  <path d="M24 17.5 20.5 8.8Q24 5.8 27.5 8.8L25 17.5Z"/>
-  <path d="M24 17.5 20.5 8.8Q24 5.8 27.5 8.8L25 17.5Z" transform="rotate(120 24 20)"/>
-  <path d="M24 17.5 20.5 8.8Q24 5.8 27.5 8.8L25 17.5Z" transform="rotate(240 24 20)"/>
-  <path d="M22 34v7M26 34v7M18 41h12l2 4H16l2-4Z"/>
+  <circle cx="24" cy="19" r="15"/>
+  <path d="M24 19c-5-6-4-10 1-10 5 0 6 5-1 10Z"/>
+  <path d="M24 19c-5-6-4-10 1-10 5 0 6 5-1 10Z" transform="rotate(120 24 19)"/>
+  <path d="M24 19c-5-6-4-10 1-10 5 0 6 5-1 10Z" transform="rotate(240 24 19)"/>
+  <path d="M24 34v9M15 43h18"/>
 </svg>

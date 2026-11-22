@@ -18,4 +18,13 @@ describe('asset list helpers', () => {
     const cheaper = { ...asset, id: '2', dailyCost: 20 }
     expect(sortComputedAssets([cheaper, asset], 'daily-desc')[0].id).toBe('1')
   })
+
+  it('finds a moved legacy item in its new category only', () => {
+    const oldDryer = { ...asset, category: '家电' as const, subcategory: '吹风机' }
+    const oldPan = { ...asset, category: '日用' as const, subcategory: '平底锅' }
+    expect(filterAssets([oldDryer], '', '日用')).toEqual([oldDryer])
+    expect(filterAssets([oldDryer], '', '家电')).toEqual([])
+    expect(filterAssets([oldPan], '', '家电')).toEqual([oldPan])
+    expect(filterAssets([oldPan], '', '日用')).toEqual([])
+  })
 })

@@ -59,17 +59,17 @@ describe('asset normalization', () => {
   })
 
   it.each([
-    ['智能穿戴', '智能手表'],
-    ['游戏机', '游戏设备'],
-    ['电脑外设', '键盘'],
-  ])('migrates the legacy digital subcategory %s', (legacySubcategory, expectedSubcategory) => {
+    ['智能穿戴', '智能手表', '穿戴'],
+    ['游戏机', '游戏设备', '数码'],
+    ['电脑外设', '键盘', '数码'],
+  ])('migrates the legacy digital subcategory %s', (legacySubcategory, expectedSubcategory, expectedCategory) => {
     const normalized = normalizeAsset({
       kind: 'item',
       category: '数码',
       subcategory: legacySubcategory,
     } as Partial<Asset>)
 
-    expect(normalized.category).toBe('数码')
+    expect(normalized.category).toBe(expectedCategory)
     expect(normalized.subcategory).toBe(expectedSubcategory)
   })
 })

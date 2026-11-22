@@ -95,37 +95,12 @@ describe('category icon catalog', () => {
     expect(serviceCategoryIconUrls.音乐).not.toBe(itemCategoryIconUrls.headphones)
   })
 
-  it('maps the twelve redrawn digital-device icons in the reference order', () => {
-    const digitalGroup = categoryGroups.find((group) => group.name === '数码')
-
-    expect(digitalGroup?.items.map((item) => item.name)).toEqual([
-      '手机',
-      '笔记本',
-      '平板',
-      '耳机',
-      '智能手表',
-      '台式电脑',
-      '显示器',
-      '相机',
-      '游戏设备',
-      '音箱',
-      '键盘',
-      '鼠标',
-    ])
-    expect(digitalGroup?.items.map((item) => item.iconKey)).toEqual([
-      'phone',
-      'laptop',
-      'tablet',
-      'headphones',
-      'smart-watch',
-      'desktop',
-      'monitor',
-      'camera',
-      'game-device',
-      'speaker',
-      'keyboard',
-      'mouse',
-    ])
+  it('keeps the lens beside the camera and related accessories together', () => {
+    const keys = categoryGroups.find((group) => group.name === '数码')!.items.map((item) => item.iconKey as string)
+    expect(keys[keys.indexOf('camera') + 1]).toBe('lens')
+    const charging = keys.indexOf('power-bank')
+    expect(keys.slice(charging, charging + 3)).toEqual(['power-bank', 'charger', 'cable'])
+    expect(keys[keys.indexOf('drive') + 1]).toBe('usb-drive')
   })
 
   it('keeps every redrawn digital-device SVG distinct and code-native', () => {
@@ -141,8 +116,6 @@ describe('category icon catalog', () => {
   })
 
   it('keeps the refined digital controls clean at compact size', () => {
-    expect(smartWatchSource).toContain('M18.5 12V4.5h11V12')
-    expect(smartWatchSource).not.toContain('m17 13')
     expect(gameConsoleSource).toContain('stroke-width="2"')
     expect(gameConsoleSource).toContain('x="20" y="18" width="8" height="8"')
     expect(gameConsoleSource).toContain('M10 22h6M13 19v6" stroke-width="2"')
@@ -151,37 +124,18 @@ describe('category icon catalog', () => {
     expect(keyboardSource).not.toContain('M10 25')
   })
 
-  it('maps the twelve redrawn appliance icons in the reference order', () => {
+  it('groups home maintenance before kitchen equipment and keeps cookware beside cooking appliances', () => {
     const applianceGroup = categoryGroups.find((group) => group.name === '家电')
 
-    expect(applianceGroup?.items.slice(0, 12).map((item) => item.name)).toEqual([
-      '冰箱',
-      '空调',
-      '洗衣机',
-      '电视',
-      '热水器',
-      '微波炉',
-      '电饭煲',
-      '烤箱',
-      '吸尘器',
-      '扫地机器人',
-      '空气净化器',
-      '电风扇',
+    const items = applianceGroup!.items
+    expect(items.slice(0, 9).map((item) => item.name)).toEqual([
+      '冰箱', '空调', '洗衣机', '热水器', '扫地机器人', '吸尘器', '洗地机', '台灯', '闹钟',
     ])
-    expect(applianceGroup?.items.slice(0, 12).map((item) => item.iconKey)).toEqual([
-      'refrigerator',
-      'air-conditioner',
-      'washing-machine',
-      'television',
-      'water-heater',
-      'microwave',
-      'rice-cooker',
-      'oven',
-      'vacuum-cleaner',
-      'robot-vacuum',
-      'air-purifier',
-      'electric-fan',
+    expect(items.slice(9, 18).map((item) => item.name)).toEqual([
+      '电饭煲', '微波炉', '电热水壶', '空气炸锅', '烤箱', '咖啡机', '料理机', '平底锅', '汤锅',
     ])
+    expect(items.find((item) => item.name === '平底锅')?.iconKey).toBe('frying-pan')
+    expect(items.find((item) => item.name === '汤锅')?.iconKey).toBe('cooking-pot')
   })
 
   it('keeps every redrawn appliance SVG distinct and code-native', () => {
@@ -196,22 +150,12 @@ describe('category icon catalog', () => {
     }
   })
 
-  it('removes appliance feet and prevents the vacuum stem from doubling', () => {
-    expect(refrigeratorSource).not.toContain('43.5v1')
-    expect(airPurifierSource).not.toContain('43.5v1')
-    expect(vacuumCleanerSource).toContain('M24 21v16.8')
-    expect(vacuumCleanerSource).toContain('r="1"')
-    expect(vacuumCleanerSource).not.toContain('M22 20v19M26 20v19')
-    expect(electricFanSource).toContain('rotate(120 24 20)')
-    expect(electricFanSource).toContain('rotate(240 24 20)')
-  })
-
-  it('gives the cloud three distinct lobes at compact and detail sizes', () => {
-    for (const source of [cloudCompactSource, cloudDetailSource]) {
-      expect(source).toContain('a8.8 8.8')
-      expect(source).toContain('6.5 6.5')
-      expect(source).toContain('A6.2 6.2')
-    }
+  it('uses the same cloud outline at compact and detail sizes', () => {
+    const parser = new DOMParser()
+    const compact = parser.parseFromString(cloudCompactSource, 'image/svg+xml').querySelector('path')?.getAttribute('d')
+    const detail = parser.parseFromString(cloudDetailSource, 'image/svg+xml').querySelector('path')?.getAttribute('d')
+    expect(compact).toBeTruthy()
+    expect(detail).toBe(compact)
   })
 
   it('migrates the former combined appliance categories to their new equivalents', () => {

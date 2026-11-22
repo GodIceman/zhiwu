@@ -40,6 +40,7 @@ export function normalizeAsset(asset: Partial<Asset>): Asset {
   const categoryPair = normalizeCategoryPair(
     String(asset.category || '其他'),
     String(asset.subcategory || ''),
+    asset.kind === 'service' ? 'service' : 'item',
   )
   const billingMode = billingModes.includes(asset.billingMode as BillingMode)
     ? asset.billingMode as BillingMode

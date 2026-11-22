@@ -7,6 +7,8 @@ const deploymentBase = process.env.VITE_BASE_PATH || '/'
 // https://vite.dev/config/
 export default defineConfig({
   base: deploymentBase,
+  // Keep the iOS minimum version aligned with this browser feature baseline.
+  build: { target: ['chrome111', 'edge111', 'firefox114', 'safari16.4'] },
   server: {
     host: '0.0.0.0',
     allowedHosts: true,
