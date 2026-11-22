@@ -17,7 +17,7 @@ jobs:
   simulator:
     if: github.event.repository.private || (github.repository == 'GodIceman/zhiwu' && github.ref == 'refs/heads/verify/ios-1.1.34')
     runs-on: macos-15
-    timeout-minutes: 25
+    timeout-minutes: 45
     env:
       DEVELOPER_DIR: /Applications/Xcode_26.3.app/Contents/Developer
     defaults:
@@ -87,6 +87,24 @@ jobs:
             xcrun simctl terminate "$device" app.zhiwu.mobile
             xcrun simctl shutdown "$device"
           done < artifacts/selected-devices.txt
+
+      - name: Exercise records and system file picker
+        run: |
+          set -o pipefail
+          ruby -rxcodeproj -e '' || gem install --user-install xcodeproj -v 1.27.0 --no-document
+          ruby scripts/prepare-ios-ui-test.rb
+          while read -r family device; do
+            xcodebuild test -project ios/App/App.xcodeproj -scheme Validation \
+              -destination "platform=iOS Simulator,id=$device" \
+              -derivedDataPath "$RUNNER_TEMP/zhiwu-ios" \
+              -parallel-testing-enabled NO -maximum-test-execution-time-allowance 160 \
+              -resultBundlePath "$RUNNER_TEMP/$family.xcresult" \
+              CODE_SIGNING_ALLOWED=NO 2>&1 | tee "artifacts/$family-ui-test.log" || status=1
+            if [[ -d "$RUNNER_TEMP/$family.xcresult" ]]; then
+              xcrun xcresulttool export attachments --path "$RUNNER_TEMP/$family.xcresult" --output-path "artifacts/$family-attachments"
+            fi
+          done < artifacts/selected-devices.txt
+          exit "${status:-0}"
 
       - name: Save simulator evidence
         if: always()
