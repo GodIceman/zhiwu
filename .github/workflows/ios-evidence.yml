@@ -1,0 +1,37 @@
+name: Review simulator screenshots
+on:
+  push:
+    branches: ['verify/ios-1.1.34-evidence']
+    paths: ['.github/workflows/ios-evidence.yml']
+permissions:
+  actions: read
+  contents: read
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Read recorded simulator screenshots
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api repos/GodIceman/zhiwu/actions/artifacts/14754095683/zip > screenshots.zip
+          python3 - <<'PY'
+          import base64, io, zipfile
+          from PIL import Image, ImageOps, ImageDraw, ImageStat
+          with zipfile.ZipFile("screenshots.zip") as z:
+              sheet = Image.new("RGB", (760, 800), "white")
+              for i, name in enumerate(["iPhone-light.png", "iPhone-dark.png", "iPad-light.png", "iPad-dark.png"]):
+                  path = next(n for n in z.namelist() if n.rsplit("/",1)[-1] == name)
+                  im = Image.open(io.BytesIO(z.read(path))).convert("RGB")
+                  print(name, im.size, ImageStat.Stat(im).stddev)
+                  thumb = ImageOps.contain(im, (375, 373))
+                  x, y = 380*(i%2), 400*(i//2)
+                  sheet.paste(thumb, (x+(380-thumb.width)//2, y+22))
+                  ImageDraw.Draw(sheet).text((x+8,y+4), name, fill="black")
+              buffer = io.BytesIO()
+              sheet.save(buffer, format="JPEG", quality=75)
+              encoded = base64.b64encode(buffer.getvalue()).decode()
+              for i in range(0, len(encoded), 1000):
+                  print("SCREENSHOT_CHUNK " + encoded[i:i+1000])
+          PY
