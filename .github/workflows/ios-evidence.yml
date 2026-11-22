@@ -16,7 +16,9 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh api repos/GodIceman/zhiwu/actions/artifacts/14754095683/zip > screenshots.zip
-          python3 - <<'PY'
+          python3 -m venv "$RUNNER_TEMP/gallery"
+          "$RUNNER_TEMP/gallery/bin/pip" install --quiet Pillow
+          "$RUNNER_TEMP/gallery/bin/python" - <<'PY'
           import base64, io, zipfile
           from PIL import Image, ImageOps, ImageDraw, ImageStat
           with zipfile.ZipFile("screenshots.zip") as z:
