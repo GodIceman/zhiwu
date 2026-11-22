@@ -1,116 +1,95 @@
 name: iOS simulator validation
-
 on:
   push:
     branches: ['verify/ios-1.1.34']
-    paths-ignore: ['.github/workflows/ios-validation.yml']
+    paths:
+      - '.github/workflows/ios-validation.yml'
+      - 'ios/**'
+      - 'src/**'
+      - 'public/**'
+      - 'scripts/**'
+      - 'package*.json'
+      - 'capacitor.config.ts'
+      - 'vite.config.ts'
+      - 'android/app/build.gradle'
   workflow_dispatch:
-
 permissions:
   contents: read
-
-concurrency:
-  group: ios-validation
-  cancel-in-progress: false
-
 jobs:
-  simulator:
+  verify:
     if: github.event.repository.private || (github.repository == 'GodIceman/zhiwu' && github.ref == 'refs/heads/verify/ios-1.1.34')
+    strategy:
+      fail-fast: false
+      matrix:
+        device: [iPhone, iPad]
     runs-on: macos-15
-    timeout-minutes: 45
+    timeout-minutes: 30
     env:
       DEVELOPER_DIR: /Applications/Xcode_26.3.app/Contents/Developer
-    defaults:
-      run:
-        shell: bash
+      FAMILY: ${{ matrix.device }}
     steps:
       - uses: actions/checkout@v6
         with:
           persist-credentials: false
-
       - uses: actions/setup-node@v6
         with:
           node-version: 22
-
-      - name: Record build environment
+      - name: Select simulator
         run: |
           mkdir -p artifacts
           xcodebuild -version | tee artifacts/xcode-version.txt
           xcrun simctl list devices available --json > artifacts/devices.json
-
-      - name: Prepare app
+          python3 - <<'PY'
+          import json, os
+          with open('artifacts/devices.json') as f:
+              runtimes = json.load(f)['devices']
+          family = os.environ['FAMILY']
+          for runtime, devices in sorted(runtimes.items(), reverse=True):
+              if '.iOS-' not in runtime:
+                  continue
+              device = next((d for d in devices if d.get('isAvailable') and d['name'].startswith(family)), None)
+              if device:
+                  break
+          else:
+              raise SystemExit(f'No available {family}')
+          print(runtime, device['name'], device['udid'])
+          with open(os.environ['GITHUB_ENV'], 'a') as f:
+              print(f"DEVICE={device['udid']}", file=f)
+          PY
+      - name: Prepare app and UI test scheme
         run: |
           npm ci
           npm run ios:sync
           npm run ios:check
-
-      - name: Compile for Simulator without signing
-        run: |
-          set -o pipefail
-          xcodebuild \
-            -project ios/App/App.xcodeproj \
-            -scheme App \
-            -configuration Debug \
-            -sdk iphonesimulator \
-            -destination 'generic/platform=iOS Simulator' \
-            -derivedDataPath "$RUNNER_TEMP/zhiwu-ios" \
-            CODE_SIGNING_ALLOWED=NO \
-            build 2>&1 | tee artifacts/build.log
-
-      - name: Launch on iPhone and iPad simulators
-        run: |
-          python3 - <<'PY'
-          import json
-          with open('artifacts/devices.json') as source:
-              devices = json.load(source)['devices']
-          available = [device for runtime, group in devices.items()
-                       if '.iOS-' in runtime for device in group
-                       if device.get('isAvailable')]
-          with open('artifacts/selected-devices.txt', 'w') as output:
-              for family in ('iPhone', 'iPad'):
-                  match = next((d for d in available if d['name'].startswith(family)), None)
-                  if match is None:
-                      raise SystemExit('No available ' + family + ' simulator')
-                  output.write(f"{family} {match['udid']}\n")
-          PY
-          while read -r family device; do
-            xcrun simctl boot "$device"
-            xcrun simctl bootstatus "$device" -b
-            xcrun simctl install "$device" "$RUNNER_TEMP/zhiwu-ios/Build/Products/Debug-iphonesimulator/App.app"
-            xcrun simctl ui "$device" appearance light
-            xcrun simctl launch --terminate-running-process "$device" app.zhiwu.mobile | tee "artifacts/$family-launch.txt"
-            sleep 12
-            xcrun simctl io "$device" screenshot "artifacts/$family-light.png"
-            xcrun simctl ui "$device" appearance dark
-            sleep 3
-            xcrun simctl io "$device" screenshot "artifacts/$family-dark.png"
-            xcrun simctl terminate "$device" app.zhiwu.mobile
-            xcrun simctl shutdown "$device"
-          done < artifacts/selected-devices.txt
-
-      - name: Exercise records and system file picker
-        run: |
-          set -o pipefail
           ruby -rxcodeproj -e '' || gem install --user-install xcodeproj -v 1.27.0 --no-document
           ruby scripts/prepare-ios-ui-test.rb
-          while read -r family device; do
-            xcodebuild test -project ios/App/App.xcodeproj -scheme Validation \
-              -destination "platform=iOS Simulator,id=$device" \
-              -derivedDataPath "$RUNNER_TEMP/zhiwu-ios" \
-              -parallel-testing-enabled NO -maximum-test-execution-time-allowance 160 \
-              -resultBundlePath "$RUNNER_TEMP/$family.xcresult" \
-              CODE_SIGNING_ALLOWED=NO 2>&1 | tee "artifacts/$family-ui-test.log" || status=1
-            if [[ -d "$RUNNER_TEMP/$family.xcresult" ]]; then
-              xcrun xcresulttool export attachments --path "$RUNNER_TEMP/$family.xcresult" --output-path "artifacts/$family-attachments"
-            fi
-          done < artifacts/selected-devices.txt
-          exit "${status:-0}"
-
-      - name: Save simulator evidence
+      - name: Run records and file picker tests
+        timeout-minutes: 20
+        run: |
+          set -o pipefail
+          xcodebuild test -project ios/App/App.xcodeproj -scheme Validation \
+            -destination "platform=iOS Simulator,id=$DEVICE" \
+            -derivedDataPath "$RUNNER_TEMP/zhiwu-ios" \
+            -parallel-testing-enabled NO -maximum-test-execution-time-allowance 240 \
+            -resultBundlePath "$RUNNER_TEMP/validation.xcresult" \
+            CODE_SIGNING_ALLOWED=NO 2>&1 | tee artifacts/ui-test.log
+      - name: Collect screenshots and test attachments
         if: always()
-        uses: actions/upload-artifact@v4
+        timeout-minutes: 3
+        run: |
+          if [[ -d "$RUNNER_TEMP/validation.xcresult" ]]; then
+            xcrun xcresulttool export attachments --path "$RUNNER_TEMP/validation.xcresult" --output-path artifacts/attachments
+          fi
+          if xcrun simctl launch "$DEVICE" app.zhiwu.mobile; then
+            for appearance in light dark; do
+              xcrun simctl ui "$DEVICE" appearance "$appearance"
+              sleep 3
+              xcrun simctl io "$DEVICE" screenshot "artifacts/$FAMILY-$appearance.png"
+            done
+          fi
+      - uses: actions/upload-artifact@v4
+        if: always()
         with:
-          name: ios-validation-${{ github.run_number }}
+          name: ios-${{ matrix.device }}-${{ github.run_number }}
           path: artifacts/
           retention-days: 1
-          if-no-files-found: warn
