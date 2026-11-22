@@ -1,0 +1,98 @@
+name: iOS simulator validation
+
+on:
+  push:
+    branches: ['verify/ios-1.1.34']
+    paths-ignore: ['.github/workflows/ios-validation.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ios-validation
+  cancel-in-progress: false
+
+jobs:
+  simulator:
+    if: github.event.repository.private || (github.repository == 'GodIceman/zhiwu' && github.ref == 'refs/heads/verify/ios-1.1.34')
+    runs-on: macos-15
+    timeout-minutes: 25
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_26.3.app/Contents/Developer
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+
+      - name: Record build environment
+        run: |
+          mkdir -p artifacts
+          xcodebuild -version | tee artifacts/xcode-version.txt
+          xcrun simctl list devices available --json > artifacts/devices.json
+
+      - name: Prepare app
+        run: |
+          npm ci
+          npm run ios:sync
+          npm run ios:check
+
+      - name: Compile for Simulator without signing
+        run: |
+          set -o pipefail
+          xcodebuild \
+            -project ios/App/App.xcodeproj \
+            -scheme App \
+            -configuration Debug \
+            -sdk iphonesimulator \
+            -destination 'generic/platform=iOS Simulator' \
+            -derivedDataPath "$RUNNER_TEMP/zhiwu-ios" \
+            CODE_SIGNING_ALLOWED=NO \
+            build 2>&1 | tee artifacts/build.log
+
+      - name: Launch on iPhone and iPad simulators
+        run: |
+          python3 - <<'PY'
+          import json
+          with open('artifacts/devices.json') as source:
+              devices = json.load(source)['devices']
+          available = [device for runtime, group in devices.items()
+                       if '.iOS-' in runtime for device in group
+                       if device.get('isAvailable')]
+          with open('artifacts/selected-devices.txt', 'w') as output:
+              for family in ('iPhone', 'iPad'):
+                  match = next((d for d in available if d['name'].startswith(family)), None)
+                  if match is None:
+                      raise SystemExit('No available ' + family + ' simulator')
+                  output.write(f"{family} {match['udid']}\n")
+          PY
+          while read -r family device; do
+            xcrun simctl boot "$device"
+            xcrun simctl bootstatus "$device" -b
+            xcrun simctl install "$device" "$RUNNER_TEMP/zhiwu-ios/Build/Products/Debug-iphonesimulator/App.app"
+            xcrun simctl ui "$device" appearance light
+            xcrun simctl launch --terminate-running-process "$device" app.zhiwu.mobile | tee "artifacts/$family-launch.txt"
+            sleep 12
+            xcrun simctl io "$device" screenshot "artifacts/$family-light.png"
+            xcrun simctl ui "$device" appearance dark
+            sleep 3
+            xcrun simctl io "$device" screenshot "artifacts/$family-dark.png"
+            xcrun simctl terminate "$device" app.zhiwu.mobile
+            xcrun simctl shutdown "$device"
+          done < artifacts/selected-devices.txt
+
+      - name: Save simulator evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-validation-${{ github.run_number }}
+          path: artifacts/
+          retention-days: 1
+          if-no-files-found: warn
