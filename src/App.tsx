@@ -41,6 +41,7 @@ import { AboutSettings } from './components/AboutSettings'
 import { ThemeDatePicker } from './components/ThemeDatePicker'
 import { CustomKindGlyph, ItemCategoryGlyph, ServiceCategoryGlyph } from './icons/category-icons'
 import { InsightBulbIcon } from './icons/insight-bulb-icon'
+import { createAssetId } from './lib/asset-id'
 import { filterAssets, sortComputedAssets, type SortKey } from './lib/asset-utils'
 import { buildCsv, createBackup, parseBackup } from './lib/backup'
 import {
@@ -608,7 +609,7 @@ function App() {
       const now = new Date().toISOString()
       const existing = assets.find((asset) => asset.id === editingId)
       const nextService: Asset = {
-        id: existing?.id ?? crypto.randomUUID(),
+        id: existing?.id ?? createAssetId(),
         name,
         kind: 'service',
         category: '其他',
@@ -672,7 +673,7 @@ function App() {
       ? purchasePriceCny
       : existing?.purchasePriceCny ?? 0
     const nextAsset: Asset = {
-      id: existing?.id ?? crypto.randomUUID(),
+      id: existing?.id ?? createAssetId(),
       name,
       kind: 'item',
       category: formValues.category,

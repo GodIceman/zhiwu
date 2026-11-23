@@ -3,6 +3,18 @@ import XCTest
 final class ZhiwuFlowTests: XCTestCase {
     let app = XCUIApplication(bundleIdentifier: "app.zhiwu.mobile")
 
+    override func tearDownWithError() throws {
+        if let testRun, testRun.failureCount > 0, app.state == .runningForeground {
+            let hierarchy = app.debugDescription
+            print("Accessibility hierarchy at failure:\n\(hierarchy)")
+            let attachment = XCTAttachment(string: hierarchy)
+            attachment.name = "accessibility-at-failure.txt"
+            attachment.lifetime = .keepAlways
+            add(attachment)
+        }
+        try super.tearDownWithError()
+    }
+
     func button(_ label: String) -> XCUIElement { app.buttons[label].firstMatch }
 
     func tap(_ element: XCUIElement, file: StaticString = #filePath, line: UInt = #line) {
@@ -21,13 +33,15 @@ final class ZhiwuFlowTests: XCTestCase {
         app.webViews.buttons.matching(NSPredicate(format: "label CONTAINS %@", name)).firstMatch
     }
 
-    func createItem(named itemName: String) {
-        tap(button("新增物品"))
-        let fields = app.webViews.textFields
-        let name = fields.element(boundBy: 0)
+    func field(_ label: String, placeholder: String) -> XCUIElement {
+        app.webViews.textFields.matching(NSPredicate(format: "label == %@ OR placeholderValue == %@", label, placeholder)).firstMatch
+    }
+
+    func fillItem(named itemName: String) {
+        let name = field("物品名称", placeholder: "例如工作电脑、通勤耳机")
         tap(name)
         name.typeText(itemName)
-        let amount = fields.element(boundBy: 1)
+        let amount = field("购入金额", placeholder: "¥")
         tap(amount)
         amount.typeText("88")
         tap(button("保存"))
@@ -42,8 +56,13 @@ final class ZhiwuFlowTests: XCTestCase {
         let laterItem = "Later \(runID)"
         app.launchArguments = ["-AppleLanguages", "(en)", "-AppleLocale", "en_US"]
         app.launch()
-        if button("开始记录").waitForExistence(timeout: 5) { tap(button("开始记录")) }
-        createItem(named: backedUpItem)
+        let welcome = button("开始记录")
+        if welcome.waitForExistence(timeout: 5) {
+            tap(welcome)
+        } else {
+            tap(button("新增物品"))
+        }
+        fillItem(named: backedUpItem)
         screenshot("saved-item")
         app.terminate()
         app.launch()
@@ -67,7 +86,8 @@ final class ZhiwuFlowTests: XCTestCase {
 
         // The import must replace a visibly different dataset.
         tap(button("清单"))
-        createItem(named: laterItem)
+        tap(button("新增物品"))
+        fillItem(named: laterItem)
         XCTAssertTrue(itemCard(backedUpItem).exists)
         tap(button("设置"))
         tap(button("导入备份"))

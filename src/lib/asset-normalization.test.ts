@@ -1,8 +1,21 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import type { Asset } from '../types'
 import { normalizeAsset } from './asset-normalization'
 
 describe('asset normalization', () => {
+  it('preserves existing IDs and generates a v4 UUID without crypto.randomUUID', () => {
+    const getRandomValues = vi.fn((bytes: Uint8Array) => bytes.fill(255))
+    vi.stubGlobal('crypto', { getRandomValues })
+    try {
+      expect(normalizeAsset({ id: 'legacy-01' }).id).toBe('legacy-01')
+      expect(getRandomValues).not.toHaveBeenCalled()
+      expect(normalizeAsset({}).id).toBe('ffffffff-ffff-4fff-bfff-ffffffffffff')
+      expect(getRandomValues).toHaveBeenCalledOnce()
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  })
+
   it('accepts simplified monthly and yearly payment modes', () => {
     const monthly = normalizeAsset({
       kind: 'service',

@@ -7,6 +7,7 @@ import {
   type BillingMode,
   type ServiceCategory,
 } from '../types'
+import { createAssetId } from './asset-id'
 
 const billingModes: BillingMode[] = [
   'monthly',
@@ -60,7 +61,7 @@ export function normalizeAsset(asset: Partial<Asset>): Asset {
     || billingMode === 'subscription'
 
   return {
-    id: String(asset.id || crypto.randomUUID()),
+    id: String(asset.id || createAssetId()),
     name: String(asset.name || '').trim(),
     kind: asset.kind === 'service' ? 'service' : 'item',
     category: categoryPair.category,
