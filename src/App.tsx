@@ -337,16 +337,20 @@ function App() {
   useEffect(() => {
     const isDark = resolvedTheme === 'dark'
     const backgroundColor = isDark ? '#111914' : '#F6F5F1'
+    const isIos = Capacitor.getPlatform() === 'ios'
+    const followSystem = isIos && settings.theme === 'system'
+    const statusBarStyle = isDark ? Style.Dark : Style.Light
 
     document.documentElement.style.setProperty('--resolved-app-bg', backgroundColor)
     document.querySelector('meta[name="theme-color"]')?.setAttribute('content', backgroundColor)
     ;(window as ZhiwuWindow).ZhiwuSystemBars?.setDarkMode(isDark)
     StatusBar.setOverlaysWebView({ overlay: true }).catch(() => undefined)
     StatusBar.setBackgroundColor({ color: backgroundColor }).catch(() => undefined)
-    StatusBar.setStyle({ style: isDark ? Style.Dark : Style.Light }).catch(() => undefined)
-    if (Capacitor.getPlatform() === 'ios') {
-      void IosNative.setAppearance({ dark: isDark, followSystem: settings.theme === 'system' }).catch(() => undefined)
-      void Keyboard.setStyle({ style: isDark ? KeyboardStyle.Dark : KeyboardStyle.Light }).catch(() => undefined)
+    StatusBar.setStyle({ style: followSystem ? Style.Default : statusBarStyle }).catch(() => undefined)
+    if (isIos) {
+      void IosNative.setAppearance({ dark: isDark, followSystem }).catch(() => undefined)
+      const keyboardStyle = isDark ? KeyboardStyle.Dark : KeyboardStyle.Light
+      void Keyboard.setStyle({ style: followSystem ? KeyboardStyle.Default : keyboardStyle }).catch(() => undefined)
     }
   }, [resolvedTheme, settings.theme])
 

@@ -19,9 +19,8 @@ final class ZhiwuViewController: CAPBridgeViewController {
 
     func applyAppearance(dark: Bool, followSystem: Bool) {
         let style: UIUserInterfaceStyle = followSystem ? .unspecified : (dark ? .dark : .light)
-        let background = dark
-            ? UIColor(red: 17 / 255.0, green: 25 / 255.0, blue: 20 / 255.0, alpha: 1)
-            : UIColor(red: 246 / 255.0, green: 245 / 255.0, blue: 241 / 255.0, alpha: 1)
+        // UIKit can change traits before the WebKit media query is delivered.
+        let background = UIColor(named: "LaunchBackground") ?? .systemBackground
 
         overrideUserInterfaceStyle = style
         // Only update this app's presenting window, never a global window list.

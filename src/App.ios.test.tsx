@@ -24,10 +24,10 @@ vi.mock('@capacitor/core', () => ({ Capacitor: { getPlatform: () => 'ios' } }))
 vi.mock('./lib/ios-native', () => ({ IosNative: { saveTextFile: mocks.nativeSave, setAppearance: mocks.setAppearance } }))
 vi.mock('@capacitor/app', () => ({ App: { addListener: mocks.addListener, exitApp: mocks.exitApp } }))
 vi.mock('@capacitor/keyboard', () => ({
-  KeyboardStyle: { Dark: 'DARK', Light: 'LIGHT' }, Keyboard: { setStyle: mocks.keyboardStyle },
+  KeyboardStyle: { Dark: 'DARK', Light: 'LIGHT', Default: 'DEFAULT' }, Keyboard: { setStyle: mocks.keyboardStyle },
 }))
 vi.mock('@capacitor/splash-screen', () => ({ SplashScreen: { hide: vi.fn(async () => undefined) } }))
-vi.mock('@capacitor/status-bar', () => ({ Style: { Dark: 'DARK', Light: 'LIGHT' }, StatusBar: {
+vi.mock('@capacitor/status-bar', () => ({ Style: { Dark: 'DARK', Light: 'LIGHT', Default: 'DEFAULT' }, StatusBar: {
   setOverlaysWebView: vi.fn(async () => undefined), setBackgroundColor: vi.fn(async () => undefined),
   setStyle: mocks.statusBarStyle,
 } }))
@@ -112,5 +112,16 @@ describe('iOS settings integration', () => {
     expect(document.documentElement.dataset.theme).toBe('system')
     expect(mocks.addListener.mock.calls.some((args) => args[0] === 'backButton')).toBe(false)
     expect(mocks.exitApp).not.toHaveBeenCalled()
+  })
+
+  it('releases the native keyboard and status bar before WebKit updates its previous forced appearance', async () => {
+    vi.stubGlobal('matchMedia', () => ({ matches: true, addEventListener: vi.fn(), removeEventListener: vi.fn() }))
+    mocks.loadSettings.mockResolvedValue({ ...settings, theme: 'dark' })
+    await openSettings()
+    expect(mocks.keyboardStyle).toHaveBeenLastCalledWith({ style: 'DARK' })
+    fireEvent.click(screen.getByRole('button', { name: '跟随系统' }))
+    await waitFor(() => expect(mocks.setAppearance).toHaveBeenLastCalledWith({ dark: true, followSystem: true }))
+    expect(mocks.keyboardStyle).toHaveBeenLastCalledWith({ style: 'DEFAULT' })
+    expect(mocks.statusBarStyle).toHaveBeenLastCalledWith({ style: 'DEFAULT' })
   })
 })
