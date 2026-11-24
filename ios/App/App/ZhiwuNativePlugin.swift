@@ -1,5 +1,6 @@
 import Capacitor
 import Foundation
+import OSLog
 import UIKit
 import UniformTypeIdentifiers
 
@@ -15,6 +16,14 @@ public final class ZhiwuNativePlugin: CAPPlugin, CAPBridgedPlugin,
     ]
 
     private enum FileOperation { case save, open }
+#if DEBUG
+    private static let pickerLog = Logger(subsystem: "app.zhiwu.mobile", category: "FilePicker")
+#endif
+    private static func traceImport(_ event: StaticString) {
+#if DEBUG
+        pickerLog.notice("\(String(describing: event), privacy: .public)")
+#endif
+    }
     private let fileQueue = DispatchQueue(label: "app.zhiwu.mobile.files", qos: .userInitiated)
     private let exportRoot = FileManager.default.temporaryDirectory
         .appendingPathComponent("ZhiwuExports", isDirectory: true)
@@ -62,7 +71,7 @@ public final class ZhiwuNativePlugin: CAPPlugin, CAPBridgedPlugin,
     @objc public func pickBackupFile(_ call: CAPPluginCall) {
         DispatchQueue.main.async {
             guard self.begin(call, operation: .open) else { return }
-            self.present(UIDocumentPickerViewController(forOpeningContentTypes: [.json], asCopy: true))
+            self.present(UIDocumentPickerViewController(forOpeningContentTypes: [.json], asCopy: false))
         }
     }
 
@@ -123,13 +132,19 @@ public final class ZhiwuNativePlugin: CAPPlugin, CAPBridgedPlugin,
         }
         picker.delegate = self
         picker.allowsMultipleSelection = false
-        picker.modalPresentationStyle = .formSheet
+        let traits = presenter.traitCollection
+        let phoneImport = pending?.operation == .open && traits.userInterfaceIdiom == .phone
+            && traits.horizontalSizeClass == .compact
+        picker.modalPresentationStyle = phoneImport ? .fullScreen : .formSheet
         picker.overrideUserInterfaceStyle = presenter.overrideUserInterfaceStyle
         activePicker = picker
         picker.presentationController?.delegate = self
         presenter.present(picker, animated: true) { [weak self, weak picker] in
             guard let self, let picker, self.activePicker === picker else { return }
             picker.presentationController?.delegate = self
+            if self.pending?.operation == .open {
+                Self.traceImport(phoneImport ? "Import picker presented fullscreen" : "Import picker presented as sheet")
+            }
         }
     }
 
@@ -143,20 +158,22 @@ public final class ZhiwuNativePlugin: CAPPlugin, CAPBridgedPlugin,
                 finish(["status": "saved"])
             }
         case .open:
+            Self.traceImport("Import selection delegate called")
             guard let url = urls.first else {
+                Self.traceImport("Import selection had no document")
                 fail(message: "未收到备份文件。", code: "READ_FAILED")
                 return
             }
-            // The picker may dismiss while the copy is being read. Its dismissal
+            // The picker may dismiss while the document is being read. Its dismissal
             // must not resolve the pending import as a cancellation.
             detachPicker()
             fileQueue.async {
-                defer { Self.removeImportedCopy(at: url) }
                 do {
-                    let raw = try String(contentsOf: url, encoding: .utf8)
-                    let text = raw.hasPrefix("\u{FEFF}") ? String(raw.dropFirst()) : raw
+                    let text = try Self.readBackup(at: url)
+                    Self.traceImport("Import document read successfully")
                     DispatchQueue.main.async { self.finish(["status": "selected", "text": text]) }
                 } catch {
+                    Self.traceImport("Import document could not be read")
                     DispatchQueue.main.async {
                         self.fail(message: "无法读取 JSON 备份文件。", code: "READ_FAILED", error: error)
                     }
@@ -165,27 +182,30 @@ public final class ZhiwuNativePlugin: CAPPlugin, CAPBridgedPlugin,
         }
     }
 
-    private static func removeImportedCopy(at url: URL) {
-        // asCopy provides a sandbox copy. Only remove the selected file inside
-        // the app's temporary directory or Documents/Inbox, never a provider URL.
-        let manager = FileManager.default
-        let path = url.standardizedFileURL.resolvingSymlinksInPath().path
-        let inbox = manager.urls(for: .documentDirectory, in: .userDomainMask).first?
-            .appendingPathComponent("Inbox", isDirectory: true)
-        let roots = [manager.temporaryDirectory, inbox].compactMap { $0 }
-        guard url.isFileURL,
-              roots.contains(where: { path.hasPrefix($0.standardizedFileURL.resolvingSymlinksInPath().path + "/") }),
-              (try? url.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true else { return }
-        try? manager.removeItem(at: url)
+    private static func readBackup(at url: URL) throws -> String {
+        let scoped = url.startAccessingSecurityScopedResource()
+        defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+
+        var coordinationError: NSError?
+        var readResult: Result<String, Error>?
+        NSFileCoordinator(filePresenter: nil).coordinate(readingItemAt: url, options: [], error: &coordinationError) { readableURL in
+            readResult = Result { try String(contentsOf: readableURL, encoding: .utf8) }
+        }
+        if let coordinationError { throw coordinationError }
+        guard let readResult else { throw CocoaError(.fileReadUnknown) }
+        let text = try readResult.get()
+        return text.hasPrefix("\u{FEFF}") ? String(text.dropFirst()) : text
     }
 
     public func documentPickerWasCancelled(_ controller: UIDocumentPickerViewController) {
         guard controller === activePicker else { return }
+        if pending?.operation == .open { Self.traceImport("Import cancellation delegate called") }
         finish(["status": "cancelled"])
     }
 
     public func presentationControllerDidDismiss(_ presentationController: UIPresentationController) {
         guard presentationController.presentedViewController === activePicker else { return }
+        if pending?.operation == .open { Self.traceImport("Import picker dismissed interactively") }
         finish(["status": "cancelled"])
     }
 

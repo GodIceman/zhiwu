@@ -21,11 +21,14 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        device: [iPhone, iPad]
+        include:
+          - { device: iPhone, xcode: '26.3' }
+          - { device: iPad, xcode: '26.3' }
+          - { device: iPhone, xcode: '26.5' }
     runs-on: macos-26
     timeout-minutes: 45
     env:
-      DEVELOPER_DIR: /Applications/Xcode_26.3.app/Contents/Developer
+      DEVELOPER_DIR: /Applications/Xcode_${{ matrix.xcode }}.app/Contents/Developer
       FAMILY: ${{ matrix.device }}
     steps:
       - uses: actions/checkout@v6
@@ -93,6 +96,15 @@ jobs:
         run: |
           set -eu
           xcrun simctl bootstatus "$DEVICE" -b
+          xcrun simctl spawn "$DEVICE" log show --last 30m --style compact \
+            --predicate 'subsystem == "app.zhiwu.mobile" && category == "FilePicker"' > artifacts/file-picker.log
+          cat artifacts/file-picker.log
+          if [[ "${{ steps.native_ui.outcome }}" == "failure" ]]; then
+            xcrun simctl spawn "$DEVICE" log show --last 20m --style compact \
+              --predicate '(subsystem BEGINSWITH[c] "com.apple.FileProvider" OR subsystem BEGINSWITH[c] "com.apple.DocumentManager") AND (messageType == error OR messageType == fault)' \
+              | tail -n 80 > artifacts/files-provider-errors.log
+            cat artifacts/files-provider-errors.log
+          fi
           if ! xcrun simctl get_app_container "$DEVICE" app.zhiwu.mobile app >/dev/null; then
             xcrun simctl install "$DEVICE" "$RUNNER_TEMP/zhiwu-ios/Build/Products/Debug-iphonesimulator/App.app"
           fi
@@ -107,6 +119,6 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: ios-${{ matrix.device }}-${{ github.run_number }}
+          name: ios-${{ matrix.device }}-xcode-${{ matrix.xcode }}-${{ github.run_number }}
           path: artifacts/
           retention-days: 1

@@ -133,9 +133,39 @@ final class ZhiwuFlowTests: XCTestCase {
             let open = app.buttons.matching(labels("Open", "打开")).firstMatch
             if open.exists && open.isHittable {
                 open.tap()
+            } else if app.frame.width < 600 && backup.exists && backup.isHittable && fileBrowser.exists {
+                openBackupFromContextMenu(backup)
             }
         }
         tap(confirm)
+    }
+
+    func openBackupFromContextMenu(_ backup: XCUIElement) {
+        backup.press(forDuration: 1.0)
+        let actions = labels("Open", "打开", "Choose", "选取", "Pick")
+        let item = app.menuItems.matching(actions).firstMatch
+        // Files also exposes compact UIContextMenu actions as plain buttons.
+        let menuButton = app.buttons.matching(actions).firstMatch
+        if item.waitForExistence(timeout: 3) && item.isHittable {
+            item.tap()
+        } else if menuButton.exists && menuButton.isHittable {
+            menuButton.tap()
+        } else {
+            // Retain the actual system options; Quick Look or Open With would
+            // leave the picker without authorizing this app to import the file.
+            print("Files context menu after long press:\n\(app.debugDescription)")
+            let screen = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
+            screen.name = "files-context-menu"
+            screen.lifetime = .keepAlways
+            add(screen)
+            let dismiss = app.buttons.matching(labels("Dismiss Context Menu", "Dismiss menu", "关闭菜单")).firstMatch
+            if dismiss.exists && dismiss.isHittable {
+                dismiss.tap()
+            } else {
+                app.terminate()
+            }
+            XCTFail("Files did not offer an Open or Choose action for the selected JSON backup")
+        }
     }
 
     func cancelExport() {
