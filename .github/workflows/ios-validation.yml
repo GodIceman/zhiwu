@@ -22,7 +22,7 @@ jobs:
       fail-fast: false
       matrix:
         device: [iPhone, iPad]
-    runs-on: macos-15
+    runs-on: macos-26
     timeout-minutes: 45
     env:
       DEVELOPER_DIR: /Applications/Xcode_26.3.app/Contents/Developer
@@ -39,19 +39,16 @@ jobs:
           mkdir -p artifacts
           xcodebuild -version | tee artifacts/xcode-version.txt
           xcrun simctl list devices available --json > artifacts/devices.json
-          python3 - <<'PY'
-          import json, os
+          python3 - "$(xcrun --sdk iphonesimulator --show-sdk-version)" <<'PY'
+          import json, os, sys
           with open('artifacts/devices.json') as f:
               runtimes = json.load(f)['devices']
           family = os.environ['FAMILY']
-          for runtime, devices in sorted(runtimes.items(), reverse=True):
-              if '.iOS-' not in runtime:
-                  continue
-              device = next((d for d in devices if d.get('isAvailable') and d['name'].startswith(family)), None)
-              if device:
-                  break
-          else:
-              raise SystemExit(f'No available {family}')
+          runtime = 'com.apple.CoreSimulator.SimRuntime.iOS-' + sys.argv[1].replace('.', '-')
+          devices = runtimes.get(runtime, [])
+          device = next((d for d in devices if d.get('isAvailable') and d['name'].startswith(family)), None)
+          if not device:
+              raise SystemExit(f'No available {family} for {runtime}')
           print(runtime, device['name'], device['udid'])
           with open(os.environ['GITHUB_ENV'], 'a') as f:
               print(f"DEVICE={device['udid']}", file=f)
