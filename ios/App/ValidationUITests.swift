@@ -100,7 +100,7 @@ final class ZhiwuFlowTests: XCTestCase {
 
         // Recents and the Browse grid use different accessibility containers.
         // Only the exported file carries this prefix in the isolated fixture.
-        let backup = app.descendants(matching: .any).matching(NSPredicate(format: "label BEGINSWITH %@", "知物备份-")).firstMatch
+        let backup = app.cells.matching(NSPredicate(format: "label BEGINSWITH %@", "知物备份-")).firstMatch
         if !backup.waitForExistence(timeout: 8) {
             // Files can initially show Recents or the list of storage locations.
             let browse = app.buttons.matching(labels("Browse", "浏览")).firstMatch
@@ -110,11 +110,24 @@ final class ZhiwuFlowTests: XCTestCase {
                 if local.exists && local.isHittable { local.tap() }
             }
         }
-        tap(backup)
+        XCTAssertTrue(backup.waitForExistence(timeout: 30))
+        XCTAssertTrue(backup.isEnabled, "Files did not allow selection of the JSON backup")
+        // In icon view the cell midpoint is on the filename, below the document
+        // thumbnail. Touch the thumbnail itself to open the document.
+        let thumbnail = backup.images.firstMatch
+        if thumbnail.exists {
+            thumbnail.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+        } else {
+            backup.tap()
+        }
         let confirm = button("继续导入")
         if !confirm.waitForExistence(timeout: 5) {
             let open = app.buttons.matching(labels("Open", "打开")).firstMatch
-            if open.exists && open.isHittable { open.tap() }
+            if open.exists && open.isHittable {
+                open.tap()
+            } else if backup.exists && thumbnail.exists {
+                thumbnail.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).doubleTap()
+            }
         }
         tap(confirm)
     }
