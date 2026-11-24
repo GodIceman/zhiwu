@@ -261,6 +261,7 @@ function App() {
   const [appDialog, setAppDialog] = useState<AppDialogState | null>(null)
   const [appToast, setAppToast] = useState('')
   const importInputRef = useRef<HTMLInputElement>(null)
+  const importPending = useRef(false)
   const dialogResolverRef = useRef<((confirmed: boolean) => void) | null>(null)
   const toastTimerRef = useRef<number | null>(null)
 
@@ -748,13 +749,26 @@ function App() {
     void exportFile(`知物清单-${toLocalDateKey()}.csv`, buildCsv(assets), 'text/csv;charset=utf-8', 'CSV 清单')
   }
 
-  async function handleImport(file: File | undefined) {
-    if (!file) return
+  function chooseBackupFile() {
+    if (Capacitor.getPlatform() !== 'ios') {
+      importInputRef.current?.click()
+      return
+    }
+    void handleImport(async () => {
+      const result = await IosNative.pickBackupFile()
+      return result.status === 'selected' ? result.text : undefined
+    })
+  }
 
+  async function handleImport(readText: () => Promise<string | undefined>) {
+    if (importPending.current) return
+    importPending.current = true
     try {
+      const text = await readText()
+      if (text === undefined) return
       let raw: unknown
       try {
-        raw = JSON.parse(await file.text())
+        raw = JSON.parse(text.replace(/^\uFEFF/, ''))
       } catch {
         throw new Error('无法读取 JSON 备份文件，请确认选择的是完整的知物备份。')
       }
@@ -784,6 +798,7 @@ function App() {
         confirmLabel: '知道了',
       })
     } finally {
+      importPending.current = false
       if (importInputRef.current) importInputRef.current.value = ''
     }
   }
@@ -973,7 +988,7 @@ function App() {
                   onThemeChange={(theme) => updateSettings({ ...settings, theme })}
                   onJsonExport={handleJsonExport}
                   onCsvExport={handleCsvExport}
-                  onImportClick={() => importInputRef.current?.click()}
+                  onImportClick={chooseBackupFile}
                   onClearDemo={handleClearDemo}
                   hasDemoAssets={assets.some((asset) => asset.id.startsWith('demo-'))}
                 />
@@ -996,7 +1011,10 @@ function App() {
         hidden
         type="file"
         accept="application/json"
-        onChange={(event) => handleImport(event.target.files?.[0])}
+        onChange={(event) => {
+          const file = event.target.files?.[0]
+          if (file) void handleImport(() => file.text())
+        }}
       />
 
       {showWelcome && !isLoading && (

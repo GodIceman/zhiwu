@@ -7,6 +7,8 @@ const mocks = vi.hoisted(() => ({
   loadAssets: vi.fn(), loadSettings: vi.fn(),
   saveSettings: vi.fn(async () => undefined),
   nativeSave: vi.fn(),
+  pickBackupFile: vi.fn(),
+  replaceAllData: vi.fn<(assets: Asset[], settings: Settings) => Promise<void>>(async () => undefined),
   setAppearance: vi.fn(async () => undefined),
   keyboardStyle: vi.fn(async () => undefined),
   statusBarStyle: vi.fn(async () => undefined),
@@ -16,12 +18,14 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock('./lib/storage', () => ({
   loadAssets: mocks.loadAssets, loadSettings: mocks.loadSettings, saveSettings: mocks.saveSettings,
-  saveAsset: vi.fn(), deleteAsset: vi.fn(), replaceAllData: vi.fn(),
+  saveAsset: vi.fn(), deleteAsset: vi.fn(), replaceAllData: mocks.replaceAllData,
   clearDemoAssets: vi.fn(), initializeFreshData: vi.fn(), updateCustomSubcategory: vi.fn(),
   defaultSettings: { dailyCostMode: 'inclusive', theme: 'system', hasSeededDemoData: true, customSubcategories: [] },
 }))
 vi.mock('@capacitor/core', () => ({ Capacitor: { getPlatform: () => 'ios' } }))
-vi.mock('./lib/ios-native', () => ({ IosNative: { saveTextFile: mocks.nativeSave, setAppearance: mocks.setAppearance } }))
+vi.mock('./lib/ios-native', () => ({ IosNative: {
+  saveTextFile: mocks.nativeSave, pickBackupFile: mocks.pickBackupFile, setAppearance: mocks.setAppearance,
+} }))
 vi.mock('@capacitor/app', () => ({ App: { addListener: mocks.addListener, exitApp: mocks.exitApp } }))
 vi.mock('@capacitor/keyboard', () => ({
   KeyboardStyle: { Dark: 'DARK', Light: 'LIGHT', Default: 'DEFAULT' }, Keyboard: { setStyle: mocks.keyboardStyle },
@@ -93,6 +97,43 @@ describe('iOS settings integration', () => {
     expect(within(dialog).getByText('文件未能保存，请检查可用存储空间后重试。')).toBeInTheDocument()
     expect(screen.queryByText('JSON 备份已保存')).not.toBeInTheDocument()
     fireEvent.click(within(dialog).getByRole('button', { name: '知道了' }))
+  })
+
+  it('confirms a native backup before replacing records and settings', async () => {
+    const restored = { ...item, id: 'from-backup', name: '相机 📷' }
+    const text = JSON.stringify({ version: 2, assets: [restored], settings: { ...settings, theme: 'dark' } })
+    mocks.pickBackupFile.mockResolvedValue({ status: 'selected', text: '\uFEFF' + text })
+    await openSettings()
+    const choose = screen.getByRole('button', { name: '导入备份' })
+    fireEvent.click(choose)
+    let confirm = await screen.findByRole('alertdialog', { name: '替换当前数据？' })
+    fireEvent.click(within(confirm).getByRole('button', { name: '取消' }))
+    await waitFor(() => expect(confirm).not.toBeInTheDocument())
+    expect(mocks.replaceAllData).not.toHaveBeenCalled()
+
+    fireEvent.click(choose)
+    confirm = await screen.findByRole('alertdialog', { name: '替换当前数据？' })
+    expect(confirm).toHaveTextContent('1 条物品、0 条服务')
+    expect(mocks.replaceAllData).not.toHaveBeenCalled()
+    fireEvent.click(within(confirm).getByRole('button', { name: '继续导入' }))
+    expect(await screen.findByRole('status')).toHaveTextContent('备份导入成功')
+    expect(mocks.replaceAllData).toHaveBeenCalledOnce()
+    expect(mocks.replaceAllData.mock.calls[0][0]).toMatchObject([{ id: restored.id, name: restored.name }])
+    expect(mocks.replaceAllData.mock.calls[0][1].theme).toBe('dark')
+  })
+
+  it('can retry after cancelling the native picker without changing data', async () => {
+    mocks.pickBackupFile.mockResolvedValueOnce({ status: 'cancelled' })
+      .mockRejectedValueOnce(new Error('文件未能读取'))
+    await openSettings()
+    const choose = screen.getByRole('button', { name: '导入备份' })
+    fireEvent.click(choose)
+    await waitFor(() => expect(mocks.pickBackupFile).toHaveBeenCalledOnce())
+    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
+    fireEvent.click(choose)
+    const failure = await screen.findByRole('alertdialog', { name: '导入失败' })
+    expect(failure).toHaveTextContent('文件未能读取')
+    expect(mocks.replaceAllData).not.toHaveBeenCalled()
   })
 
   it('keeps the native appearance and keyboard in sync without registering Android back handling', async () => {

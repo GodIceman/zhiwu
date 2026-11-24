@@ -1,6 +1,7 @@
 import Capacitor
 import Foundation
 import UIKit
+import UniformTypeIdentifiers
 
 @objc(ZhiwuNativePlugin)
 public final class ZhiwuNativePlugin: CAPPlugin, CAPBridgedPlugin,
@@ -9,24 +10,23 @@ public final class ZhiwuNativePlugin: CAPPlugin, CAPBridgedPlugin,
     public let jsName = "ZhiwuNative"
     public let pluginMethods: [CAPPluginMethod] = [
         CAPPluginMethod(name: "saveTextFile", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "pickBackupFile", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "setAppearance", returnType: CAPPluginReturnPromise)
     ]
 
-    private let exportQueue = DispatchQueue(label: "app.zhiwu.mobile.export", qos: .userInitiated)
+    private enum FileOperation { case save, open }
+    private let fileQueue = DispatchQueue(label: "app.zhiwu.mobile.files", qos: .userInitiated)
     private let exportRoot = FileManager.default.temporaryDirectory
         .appendingPathComponent("ZhiwuExports", isDirectory: true)
-    // All session state is accessed on the main queue. Holding the call keeps
-    // its promise alive until the system picker reports an actual outcome.
-    private var pendingCall: CAPPluginCall?
+    // Session state stays on the main queue until the picker and file I/O finish.
+    private var pending: (call: CAPPluginCall, operation: FileOperation)?
     private var temporaryDirectory: URL?
     private var activePicker: UIDocumentPickerViewController?
 
     public override func load() {
         super.load()
         let root = exportRoot
-        // A force-quit can skip delegate cleanup. This queue also handles new
-        // writes, so stale cleanup finishes before the next export begins.
-        exportQueue.async { try? FileManager.default.removeItem(at: root) }
+        fileQueue.async { try? FileManager.default.removeItem(at: root) }
     }
 
     @objc public func saveTextFile(_ call: CAPPluginCall) {
@@ -38,53 +38,31 @@ public final class ZhiwuNativePlugin: CAPPlugin, CAPBridgedPlugin,
             return
         }
 
-        DispatchQueue.main.async { [weak self] in
-            guard let self else {
-                call.reject("导出服务不可用。", "UNAVAILABLE")
-                return
-            }
-            guard self.pendingCall == nil else {
-                call.reject("请先完成或取消正在进行的导出。", "EXPORT_BUSY")
-                return
-            }
-            guard let presenter = self.bridge?.viewController,
-                  presenter.viewIfLoaded?.window != nil,
-                  UIApplication.shared.applicationState == .active,
-                  presenter.presentedViewController == nil else {
-                call.reject("暂时无法打开文件保存窗口。", "PRESENTATION_UNAVAILABLE")
-                return
-            }
-
-            presenter.view.endEditing(true)
-            self.pendingCall = call
+        DispatchQueue.main.async {
+            guard self.begin(call, operation: .save) else { return }
             let directory = self.exportRoot.appendingPathComponent(UUID().uuidString, isDirectory: true)
             let fileURL = directory.appendingPathComponent(filename, isDirectory: false)
             self.temporaryDirectory = directory
-
-            self.exportQueue.async { [weak self] in
+            self.fileQueue.async {
                 do {
                     try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
                     try Data(text.utf8).write(to: fileURL, options: .atomic)
+                    DispatchQueue.main.async {
+                        self.present(UIDocumentPickerViewController(forExporting: [fileURL], asCopy: true))
+                    }
                 } catch {
                     DispatchQueue.main.async {
-                        guard let self else {
-                            try? FileManager.default.removeItem(at: directory)
-                            call.reject("导出服务不可用。", "UNAVAILABLE")
-                            return
-                        }
-                        self.failExport(message: "无法创建导出文件，请检查存储空间。", code: "WRITE_FAILED", error: error)
+                        self.fail(message: "无法创建导出文件，请检查存储空间。", code: "WRITE_FAILED", error: error)
                     }
-                    return
-                }
-                DispatchQueue.main.async {
-                    guard let self else {
-                        try? FileManager.default.removeItem(at: directory)
-                        call.reject("导出服务不可用。", "UNAVAILABLE")
-                        return
-                    }
-                    self.presentExport(fileURL: fileURL)
                 }
             }
+        }
+    }
+
+    @objc public func pickBackupFile(_ call: CAPPluginCall) {
+        DispatchQueue.main.async {
+            guard self.begin(call, operation: .open) else { return }
+            self.present(UIDocumentPickerViewController(forOpeningContentTypes: [.json], asCopy: true))
         }
     }
 
@@ -116,18 +94,35 @@ public final class ZhiwuNativePlugin: CAPPlugin, CAPBridgedPlugin,
             || (fileExtension == "csv" && type == "text/csv")
     }
 
-    private func presentExport(fileURL: URL) {
+    private var availablePresenter: UIViewController? {
         guard let presenter = bridge?.viewController,
               presenter.viewIfLoaded?.window != nil,
               UIApplication.shared.applicationState == .active,
-              presenter.presentedViewController == nil else {
-            failExport(message: "暂时无法打开文件保存窗口。", code: "PRESENTATION_UNAVAILABLE")
+              presenter.presentedViewController == nil else { return nil }
+        return presenter
+    }
+
+    private func begin(_ call: CAPPluginCall, operation: FileOperation) -> Bool {
+        guard pending == nil else {
+            call.reject("请先完成或取消正在进行的文件操作。", operation == .save ? "EXPORT_BUSY" : "IMPORT_BUSY")
+            return false
+        }
+        guard let presenter = availablePresenter else {
+            call.reject("暂时无法打开文件窗口。", "PRESENTATION_UNAVAILABLE")
+            return false
+        }
+        presenter.view.endEditing(true)
+        pending = (call, operation)
+        return true
+    }
+
+    private func present(_ picker: UIDocumentPickerViewController) {
+        guard let presenter = availablePresenter else {
+            fail(message: "暂时无法打开文件窗口。", code: "PRESENTATION_UNAVAILABLE")
             return
         }
-        let picker = UIDocumentPickerViewController(forExporting: [fileURL], asCopy: true)
         picker.delegate = self
         picker.allowsMultipleSelection = false
-        // A form sheet supports iPad without requiring a popover anchor.
         picker.modalPresentationStyle = .formSheet
         picker.overrideUserInterfaceStyle = presenter.overrideUserInterfaceStyle
         activePicker = picker
@@ -139,48 +134,83 @@ public final class ZhiwuNativePlugin: CAPPlugin, CAPBridgedPlugin,
     }
 
     public func documentPicker(_ controller: UIDocumentPickerViewController, didPickDocumentsAt urls: [URL]) {
-        guard controller === activePicker else { return }
-        if urls.isEmpty {
-            failExport(message: "文件未能保存。", code: "EXPORT_FAILED")
-        } else {
-            // In export mode these URLs refer to the destination copies. The
-            // source can now be removed; no access to the external URL is needed.
-            finishExport(status: "saved")
+        guard controller === activePicker, let operation = pending?.operation else { return }
+        switch operation {
+        case .save:
+            if urls.isEmpty {
+                fail(message: "文件未能保存。", code: "EXPORT_FAILED")
+            } else {
+                finish(["status": "saved"])
+            }
+        case .open:
+            guard let url = urls.first else {
+                fail(message: "未收到备份文件。", code: "READ_FAILED")
+                return
+            }
+            // The picker may dismiss while the copy is being read. Its dismissal
+            // must not resolve the pending import as a cancellation.
+            detachPicker()
+            fileQueue.async {
+                defer { Self.removeImportedCopy(at: url) }
+                do {
+                    let raw = try String(contentsOf: url, encoding: .utf8)
+                    let text = raw.hasPrefix("\u{FEFF}") ? String(raw.dropFirst()) : raw
+                    DispatchQueue.main.async { self.finish(["status": "selected", "text": text]) }
+                } catch {
+                    DispatchQueue.main.async {
+                        self.fail(message: "无法读取 JSON 备份文件。", code: "READ_FAILED", error: error)
+                    }
+                }
+            }
         }
+    }
+
+    private static func removeImportedCopy(at url: URL) {
+        // asCopy provides a sandbox copy. Only remove the selected file inside
+        // the app's temporary directory or Documents/Inbox, never a provider URL.
+        let manager = FileManager.default
+        let path = url.standardizedFileURL.resolvingSymlinksInPath().path
+        let inbox = manager.urls(for: .documentDirectory, in: .userDomainMask).first?
+            .appendingPathComponent("Inbox", isDirectory: true)
+        let roots = [manager.temporaryDirectory, inbox].compactMap { $0 }
+        guard url.isFileURL,
+              roots.contains(where: { path.hasPrefix($0.standardizedFileURL.resolvingSymlinksInPath().path + "/") }),
+              (try? url.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true else { return }
+        try? manager.removeItem(at: url)
     }
 
     public func documentPickerWasCancelled(_ controller: UIDocumentPickerViewController) {
         guard controller === activePicker else { return }
-        finishExport(status: "cancelled")
+        finish(["status": "cancelled"])
     }
 
     public func presentationControllerDidDismiss(_ presentationController: UIPresentationController) {
         guard presentationController.presentedViewController === activePicker else { return }
-        // Covers swipe-to-dismiss on iPhone/iPad as well as the Cancel button.
-        finishExport(status: "cancelled")
+        finish(["status": "cancelled"])
     }
 
-    private func finishExport(status: String) {
-        let call = pendingCall
-        cleanUpExport()
-        call?.resolve(["status": status])
-    }
-
-    private func failExport(message: String, code: String, error: Error? = nil) {
-        let call = pendingCall
-        cleanUpExport()
-        call?.reject(message, code, error)
-    }
-
-    private func cleanUpExport() {
-        let directory = temporaryDirectory
-        pendingCall = nil
-        temporaryDirectory = nil
+    private func detachPicker() {
         activePicker?.delegate = nil
         activePicker?.presentationController?.delegate = nil
         activePicker = nil
-        if let directory {
-            exportQueue.async { try? FileManager.default.removeItem(at: directory) }
+    }
+
+    private func finish(_ result: PluginCallResultData) {
+        takeCall()?.resolve(result)
+    }
+
+    private func fail(message: String, code: String, error: Error? = nil) {
+        takeCall()?.reject(message, code, error)
+    }
+
+    private func takeCall() -> CAPPluginCall? {
+        let call = pending?.call
+        pending = nil
+        detachPicker()
+        if let directory = temporaryDirectory {
+            temporaryDirectory = nil
+            fileQueue.async { try? FileManager.default.removeItem(at: directory) }
         }
+        return call
     }
 }
