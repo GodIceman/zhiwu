@@ -134,7 +134,7 @@ export function ThemeDatePicker({
     if (!isOpen) return
 
     const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') setPortalHost(null)
+      if (event.key === 'Escape' && !dialogRef.current?.closest('[inert]')) setPortalHost(null)
     }
     const handleNativeBack = () => setPortalHost(null)
 

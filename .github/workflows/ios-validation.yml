@@ -67,6 +67,7 @@ jobs:
           ruby -rxcodeproj -e '' || gem install --user-install xcodeproj -v 1.27.0 --no-document
           ruby scripts/prepare-ios-ui-test.rb
       - name: Run records and file picker tests
+        id: native_ui
         timeout-minutes: 30
         run: |
           set -o pipefail
@@ -77,6 +78,11 @@ jobs:
             -default-test-execution-time-allowance 900 -maximum-test-execution-time-allowance 900 \
             -resultBundlePath "$RUNNER_TEMP/validation.xcresult" \
             CODE_SIGNING_ALLOWED=NO 2>&1 | tee artifacts/ui-test.log
+      - name: Check documents saved in Files
+        if: ${{ !cancelled() && (steps.native_ui.outcome == 'success' || steps.native_ui.outcome == 'failure') }}
+        run: |
+          set -o pipefail
+          python3 scripts/check-ios-exports.py artifacts/devices.json "$DEVICE" artifacts/ui-test.log 2>&1 | tee artifacts/export-check.txt
       - name: Collect test attachments
         if: always()
         timeout-minutes: 3
