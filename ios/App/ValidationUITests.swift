@@ -11,14 +11,15 @@ final class ZhiwuFlowTests: XCTestCase {
             attachment.name = "accessibility-at-failure.txt"
             attachment.lifetime = .keepAlways
             add(attachment)
+            screenshot("failure-screen")
         }
         try super.tearDownWithError()
     }
 
     func button(_ label: String) -> XCUIElement { app.buttons[label].firstMatch }
 
-    func tap(_ element: XCUIElement, file: StaticString = #filePath, line: UInt = #line) {
-        XCTAssertTrue(element.waitForExistence(timeout: 12), "Missing \(element)", file: file, line: line)
+    func tap(_ element: XCUIElement, timeout: TimeInterval = 30, file: StaticString = #filePath, line: UInt = #line) {
+        XCTAssertTrue(element.waitForExistence(timeout: timeout), "Missing \(element)", file: file, line: line)
         element.tap()
     }
 
@@ -35,6 +36,15 @@ final class ZhiwuFlowTests: XCTestCase {
 
     func field(_ label: String, placeholder: String) -> XCUIElement {
         app.webViews.textFields.matching(NSPredicate(format: "label == %@ OR placeholderValue == %@", label, placeholder)).firstMatch
+    }
+
+    func reopenList() {
+        app.terminate()
+        app.launch()
+        let list = button("清单")
+        XCTAssertTrue(list.waitForExistence(timeout: 120), "App did not load its navigation after relaunch")
+        XCTAssertFalse(button("开始记录").exists, "Relaunch unexpectedly showed first-run onboarding")
+        tap(list)
     }
 
     func fillItem(named itemName: String) {
@@ -56,17 +66,12 @@ final class ZhiwuFlowTests: XCTestCase {
         let laterItem = "Later \(runID)"
         app.launchArguments = ["-AppleLanguages", "(en)", "-AppleLocale", "en_US"]
         app.launch()
-        let welcome = button("开始记录")
-        if welcome.waitForExistence(timeout: 5) {
-            tap(welcome)
-        } else {
-            tap(button("新增物品"))
-        }
+        // Each CI job installs on a fresh simulator. Wait for WKWebView to finish
+        // its first load; the navigation behind this dialog cannot be used yet.
+        tap(button("开始记录"), timeout: 120)
         fillItem(named: backedUpItem)
         screenshot("saved-item")
-        app.terminate()
-        app.launch()
-        tap(button("清单"))
+        reopenList()
         XCTAssertTrue(itemCard(backedUpItem).waitForExistence(timeout: 10))
         tap(button("设置"))
         tap(button("深色"))
@@ -99,11 +104,12 @@ final class ZhiwuFlowTests: XCTestCase {
         tap(button("清单"))
         XCTAssertTrue(itemCard(backedUpItem).waitForExistence(timeout: 10))
         XCTAssertFalse(itemCard(laterItem).exists)
-        app.terminate()
-        app.launch()
-        tap(button("清单"))
+        reopenList()
         XCTAssertTrue(itemCard(backedUpItem).waitForExistence(timeout: 10))
         XCTAssertFalse(itemCard(laterItem).exists)
         screenshot("restored-item")
+        tap(button("设置"))
+        tap(button("跟随系统"))
+        tap(button("总览"))
     }
 }

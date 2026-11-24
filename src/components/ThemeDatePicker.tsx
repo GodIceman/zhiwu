@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { CalendarDays, ChevronDown, ChevronLeft, ChevronRight, X } from 'lucide-react'
 import { toLocalDateKey } from '../lib/date'
@@ -89,12 +89,15 @@ export function ThemeDatePicker({
   placeholder = '选择日期',
   allowClear = true,
 }: ThemeDatePickerProps) {
-  const [isOpen, setIsOpen] = useState(false)
+  const [portalHost, setPortalHost] = useState<HTMLElement | null>(null)
+  const isOpen = portalHost !== null
   const [view, setView] = useState<'days' | 'years'>('days')
   const initialMonth = getInitialMonth(value, min, max)
   const [visibleYear, setVisibleYear] = useState(initialMonth.getFullYear())
   const [visibleMonth, setVisibleMonth] = useState(initialMonth.getMonth())
   const selectedYearRef = useRef<HTMLButtonElement>(null)
+  const triggerRef = useRef<HTMLButtonElement>(null)
+  const dialogRef = useRef<HTMLElement>(null)
   const today = toLocalDateKey()
 
   const cells = useMemo(
@@ -109,13 +112,31 @@ export function ThemeDatePicker({
     [maxYear, minYear],
   )
 
+  useLayoutEffect(() => {
+    if (!isOpen) return
+    const trigger = triggerRef.current
+    const form = trigger?.closest<HTMLElement>('[role="dialog"]')
+    dialogRef.current?.focus({ preventScroll: true })
+    if (form) {
+      form.inert = true
+      form.setAttribute('aria-hidden', 'true')
+    }
+    return () => {
+      if (form) {
+        form.inert = false
+        form.removeAttribute('aria-hidden')
+      }
+      if (trigger?.isConnected && !trigger.closest('[inert]')) trigger.focus({ preventScroll: true })
+    }
+  }, [isOpen])
+
   useEffect(() => {
     if (!isOpen) return
 
     const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') setIsOpen(false)
+      if (event.key === 'Escape') setPortalHost(null)
     }
-    const handleNativeBack = () => setIsOpen(false)
+    const handleNativeBack = () => setPortalHost(null)
 
     window.addEventListener('keydown', handleKeyDown)
     window.addEventListener('zhiwu:close-date-picker', handleNativeBack)
@@ -146,7 +167,7 @@ export function ThemeDatePicker({
   function selectDate(dateKey: string) {
     if (!isDateAllowed(dateKey, min, max)) return
     onChange(dateKey)
-    setIsOpen(false)
+    setPortalHost(null)
   }
 
   function openPicker() {
@@ -154,7 +175,7 @@ export function ThemeDatePicker({
     setVisibleYear(nextMonth.getFullYear())
     setVisibleMonth(nextMonth.getMonth())
     setView('days')
-    setIsOpen(true)
+    setPortalHost(triggerRef.current?.closest<HTMLElement>('.app-frame') ?? document.body)
   }
 
   const dialog = isOpen ? (
@@ -162,10 +183,12 @@ export function ThemeDatePicker({
       className="date-picker-backdrop"
       role="presentation"
       onMouseDown={(event) => {
-        if (event.target === event.currentTarget) setIsOpen(false)
+        if (event.target === event.currentTarget) setPortalHost(null)
       }}
     >
       <section
+        ref={dialogRef}
+        tabIndex={-1}
         className="date-picker-dialog"
         role="dialog"
         aria-modal="true"
@@ -179,7 +202,7 @@ export function ThemeDatePicker({
           <button
             className="date-picker-close"
             type="button"
-            onClick={() => setIsOpen(false)}
+            onClick={() => setPortalHost(null)}
             aria-label="关闭日期选择"
           >
             <X size={18} />
@@ -271,7 +294,7 @@ export function ThemeDatePicker({
               type="button"
               onClick={() => {
                 onChange('')
-                setIsOpen(false)
+                setPortalHost(null)
               }}
               disabled={!value}
             >
@@ -279,7 +302,7 @@ export function ThemeDatePicker({
             </button>
           )}
           <span />
-          <button type="button" onClick={() => setIsOpen(false)}>取消</button>
+          <button type="button" onClick={() => setPortalHost(null)}>取消</button>
           <button
             className="primary"
             type="button"
@@ -296,6 +319,7 @@ export function ThemeDatePicker({
   return (
     <>
       <button
+        ref={triggerRef}
         className={value ? 'date-field-trigger has-value' : 'date-field-trigger'}
         type="button"
         onClick={openPicker}
@@ -306,7 +330,7 @@ export function ThemeDatePicker({
         <span>{value ? formatDateLabel(value) : placeholder}</span>
         <CalendarDays size={17} aria-hidden="true" />
       </button>
-      {dialog && createPortal(dialog, document.body)}
+      {dialog && portalHost && createPortal(dialog, portalHost)}
     </>
   )
 }

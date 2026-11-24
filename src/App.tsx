@@ -8,6 +8,7 @@ import {
   type CSSProperties,
   type ReactNode,
 } from 'react'
+import { createPortal } from 'react-dom'
 import { App as CapacitorApp } from '@capacitor/app'
 import { Capacitor } from '@capacitor/core'
 import { Keyboard, KeyboardStyle } from '@capacitor/keyboard'
@@ -826,6 +827,7 @@ function App() {
   }
 
   const formOpen = editingId !== null || formValues !== emptyForm
+  const mainScreenCovered = showWelcome || formOpen || Boolean(selectedAsset || selectedService)
   const topbarMode = activeTab === 'home' ? homeMode : activeTab === 'assets' ? recordsMode : 'item'
 
   useEffect(() => {
@@ -872,8 +874,12 @@ function App() {
   }
 
   return (
-    <div className="app-frame">
-      <div className={isLoading ? 'app-shell splash-shell' : 'app-shell'}>
+    <div className="app-frame" inert={Boolean(appDialog)} aria-hidden={appDialog ? true : undefined}>
+      <div
+        className={isLoading ? 'app-shell splash-shell' : 'app-shell'}
+        inert={mainScreenCovered}
+        aria-hidden={mainScreenCovered || undefined}
+      >
         {!isLoading && (
           <header className="topbar">
             <div className={activeTab === 'settings' ? 'topbar-brand settings-brand' : 'topbar-brand'}>
@@ -987,7 +993,7 @@ function App() {
 
       <input
         ref={importInputRef}
-        className="visually-hidden"
+        hidden
         type="file"
         accept="application/json"
         onChange={(event) => handleImport(event.target.files?.[0])}
@@ -1045,8 +1051,9 @@ function App() {
         />
       )}
 
-      {appDialog && (
-        <ThemedDialog dialog={appDialog} onResult={settleAppDialog} />
+      {appDialog && createPortal(
+        <ThemedDialog dialog={appDialog} onResult={settleAppDialog} />,
+        document.body,
       )}
       {appToast && <AppToast message={appToast} />}
     </div>
