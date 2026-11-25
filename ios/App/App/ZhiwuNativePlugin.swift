@@ -57,7 +57,8 @@ public final class ZhiwuNativePlugin: CAPPlugin, CAPBridgedPlugin,
                     try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
                     try Data(text.utf8).write(to: fileURL, options: .atomic)
                     DispatchQueue.main.async {
-                        self.present(UIDocumentPickerViewController(forExporting: [fileURL], asCopy: true))
+                        // This file was generated for the export, so Files can move it to the chosen destination.
+                        self.present(UIDocumentPickerViewController(forExporting: [fileURL], asCopy: false))
                     }
                 } catch {
                     DispatchQueue.main.async {

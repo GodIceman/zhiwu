@@ -84,6 +84,12 @@ final class ZhiwuFlowTests: XCTestCase {
         XCTAssertEqual(XCTWaiter.wait(for: [gone], timeout: 30), .completed, "Picker stayed open")
     }
 
+    func waitForHittable(_ element: XCUIElement, timeout: TimeInterval) -> Bool {
+        let ready = NSPredicate { _, _ in element.exists && element.isHittable }
+        let expectation = XCTNSPredicateExpectation(predicate: ready, object: nil)
+        return XCTWaiter.wait(for: [expectation], timeout: timeout) == .completed
+    }
+
     func openExport(_ label: String) {
         tap(button(label))
         XCTAssertTrue(fileBrowser.waitForExistence(timeout: 60), "Files did not open for \(label)")
@@ -93,7 +99,8 @@ final class ZhiwuFlowTests: XCTestCase {
         openExport(label)
         screenshot("system-export-\(label)")
         let save = fileBrowser.buttons.matching(labels("Save", "存储", "保存")).firstMatch
-        tap(save)
+        XCTAssertTrue(waitForHittable(save, timeout: 30), "Files did not make Save available")
+        save.tap()
         waitForDismissal(fileBrowser)
     }
 
@@ -172,12 +179,15 @@ final class ZhiwuFlowTests: XCTestCase {
         // iPad exposes a Cancel button. The compact sheet can expose only
         // Save and More in its toolbar and supports interactive dismissal.
         let cancel = app.buttons.matching(labels("Cancel", "取消")).firstMatch
-        if cancel.exists && cancel.isHittable {
+        let compact = app.frame.width < 600
+        if waitForHittable(cancel, timeout: compact ? 6 : 20) {
             cancel.tap()
-        } else {
+        } else if compact {
             let grip = fileBrowser.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.01))
             let bottom = fileBrowser.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.92))
             grip.press(forDuration: 0.15, thenDragTo: bottom)
+        } else {
+            XCTFail("Files did not make Cancel available")
         }
         waitForDismissal(fileBrowser)
     }
