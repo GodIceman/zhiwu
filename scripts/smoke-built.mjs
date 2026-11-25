@@ -59,3 +59,5 @@ if (startupError) throw new Error(`Production startup boundary rendered: ${start
 if (!document.querySelector('.bottom-nav')) throw new Error('Production bundle did not reach primary navigation')
 
 console.log('Production bundle reached primary navigation')
+// The app schedules a refresh at local midnight; release jsdom timers on exit.
+window.close()

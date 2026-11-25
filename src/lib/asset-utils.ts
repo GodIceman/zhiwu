@@ -1,4 +1,4 @@
-import type { Asset } from '../types'
+import { getActiveItemCategory, getSubcategoryDisplayName, type Asset } from '../types'
 import type { ComputedAsset } from './calculations'
 
 export type SortKey = 'daily-desc' | 'daily-asc' | 'date-desc' | 'price-desc' | 'price-asc' | 'name-asc'
@@ -11,8 +11,11 @@ export function filterAssets(assets: Asset[], search: string, category: string) 
       !keyword ||
       asset.name.toLowerCase().includes(keyword) ||
       asset.subcategory.toLowerCase().includes(keyword) ||
+      getSubcategoryDisplayName(asset.category, asset.subcategory).toLowerCase().includes(keyword) ||
       asset.note.toLowerCase().includes(keyword)
-    const matchesCategory = category === '全部' || asset.category === category
+    const matchesCategory = category === '全部' || (asset.kind === 'service'
+      ? asset.category === category
+      : getActiveItemCategory(asset.category, asset.subcategory) === category)
 
     return matchesKeyword && matchesCategory
   })

@@ -1,8 +1,21 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import type { Asset } from '../types'
 import { normalizeAsset } from './asset-normalization'
 
 describe('asset normalization', () => {
+  it('preserves existing IDs and generates a v4 UUID without crypto.randomUUID', () => {
+    const getRandomValues = vi.fn((bytes: Uint8Array) => bytes.fill(255))
+    vi.stubGlobal('crypto', { getRandomValues })
+    try {
+      expect(normalizeAsset({ id: 'legacy-01' }).id).toBe('legacy-01')
+      expect(getRandomValues).not.toHaveBeenCalled()
+      expect(normalizeAsset({}).id).toBe('ffffffff-ffff-4fff-bfff-ffffffffffff')
+      expect(getRandomValues).toHaveBeenCalledOnce()
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  })
+
   it('accepts simplified monthly and yearly payment modes', () => {
     const monthly = normalizeAsset({
       kind: 'service',
@@ -59,17 +72,17 @@ describe('asset normalization', () => {
   })
 
   it.each([
-    ['智能穿戴', '智能手表'],
-    ['游戏机', '游戏设备'],
-    ['电脑外设', '键盘'],
-  ])('migrates the legacy digital subcategory %s', (legacySubcategory, expectedSubcategory) => {
+    ['智能穿戴', '智能手表', '穿戴'],
+    ['游戏机', '游戏设备', '数码'],
+    ['电脑外设', '键盘', '数码'],
+  ])('migrates the legacy digital subcategory %s', (legacySubcategory, expectedSubcategory, expectedCategory) => {
     const normalized = normalizeAsset({
       kind: 'item',
       category: '数码',
       subcategory: legacySubcategory,
     } as Partial<Asset>)
 
-    expect(normalized.category).toBe('数码')
+    expect(normalized.category).toBe(expectedCategory)
     expect(normalized.subcategory).toBe(expectedSubcategory)
   })
 })

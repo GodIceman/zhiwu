@@ -8,7 +8,10 @@ import {
   type CSSProperties,
   type ReactNode,
 } from 'react'
+import { createPortal } from 'react-dom'
 import { App as CapacitorApp } from '@capacitor/app'
+import { Capacitor } from '@capacitor/core'
+import { Keyboard, KeyboardStyle } from '@capacitor/keyboard'
 import { SplashScreen } from '@capacitor/splash-screen'
 import { StatusBar, Style } from '@capacitor/status-bar'
 import { Icon as MdiIcon } from '@mdi/react'
@@ -26,7 +29,6 @@ import {
   ChevronUp,
   Download,
   Edit3,
-  Package,
   Plus,
   Search,
   SlidersHorizontal,
@@ -36,9 +38,11 @@ import {
   X,
 } from 'lucide-react'
 import './App.css'
+import { AboutSettings } from './components/AboutSettings'
 import { ThemeDatePicker } from './components/ThemeDatePicker'
-import { ItemCategoryGlyph, ServiceCategoryGlyph } from './icons/category-icons'
+import { CustomKindGlyph, ItemCategoryGlyph, ServiceCategoryGlyph } from './icons/category-icons'
 import { InsightBulbIcon } from './icons/insight-bulb-icon'
+import { createAssetId } from './lib/asset-id'
 import { filterAssets, sortComputedAssets, type SortKey } from './lib/asset-utils'
 import { buildCsv, createBackup, parseBackup } from './lib/backup'
 import {
@@ -52,16 +56,18 @@ import {
 import { isFutureLocalDate, toLocalDateKey } from './lib/date'
 import { createDemoAssets } from './lib/demo-data'
 import { downloadTextFile } from './lib/download'
+import { IosNative } from './lib/ios-native'
 import {
   defaultSettings,
+  clearDemoAssets,
   deleteAsset,
+  initializeFreshData,
   loadAssets,
   loadSettings,
   replaceAllData,
-  replaceAssets,
   saveAsset,
-  saveAssets,
   saveSettings,
+  updateCustomSubcategory,
 } from './lib/storage'
 import {
   billingCycleLabels,
@@ -76,10 +82,14 @@ import {
   type ComputedService,
 } from './lib/service-utils'
 import {
+  activeItemCategories,
   defaultCategory,
   defaultSubcategory,
   getCategoryGroups,
+  getCategoryDisplayName,
+  getSelectableCategoryGroups,
   getDefaultSubcategory,
+  getSubcategoryDisplayName,
   getSubcategoryMeta,
   serviceCategories,
   type AiUsageTag,
@@ -128,8 +138,7 @@ const serviceSortOptions: SortOption<ServiceSortKey>[] = [
   { value: 'name-asc', label: '名称排序' },
 ]
 
-const todayKey = toLocalDateKey()
-const mvpCategories: Category[] = ['数码', '家电']
+const mvpCategories: readonly Category[] = activeItemCategories
 
 const emptyForm: AssetFormValues = {
   kind: 'item',
@@ -138,7 +147,7 @@ const emptyForm: AssetFormValues = {
   subcategory: defaultSubcategory,
   valueTrackingEnabled: true,
   purchasePriceCny: '',
-  purchaseDate: todayKey,
+  purchaseDate: '',
   photoDataUrl: '',
   note: '',
   serviceCategory: '其他',
@@ -151,31 +160,6 @@ const emptyForm: AssetFormValues = {
   planName: '',
   usageTags: [],
   showMoreServiceFields: false,
-}
-
-function normalizeBillingModeForForm(asset: Asset): BillingMode {
-  const mode = asset.billingMode ?? 'monthly'
-
-  if ((asset.serviceAmountCny ?? 0) === 0) return 'free'
-
-  if (mode === 'subscription') {
-    return asset.billingCycle === 'yearly' ? 'yearly' : 'monthly'
-  }
-
-  if (mode === 'fixed' || mode === 'credit') return 'one-time'
-  if (mode === 'usage') return 'monthly'
-
-  return mode
-}
-
-function normalizeServiceAmountForForm(asset: Asset) {
-  const amount = Math.max(0, Number(asset.serviceAmountCny) || 0)
-
-  if (asset.billingMode !== 'subscription') return amount
-  if (asset.billingCycle === 'weekly') return Math.round(amount * 52 / 12 * 100) / 100
-  if (asset.billingCycle === 'quarterly') return Math.round(amount / 3 * 100) / 100
-
-  return amount
 }
 
 function isRecurringBillingMode(mode: BillingMode | undefined) {
@@ -251,12 +235,16 @@ type ZhiwuWindow = Window & {
 }
 
 function App() {
+  const [todayKey, setTodayKey] = useState(() => toLocalDateKey())
   const [assets, setAssets] = useState<Asset[]>([])
   const [settings, setSettings] = useState<Settings>(defaultSettings)
   const [activeTab, setActiveTab] = useState<TabKey>('home')
   const [homeMode, setHomeMode] = useState<RecordKind>('item')
   const [recordsMode, setRecordsMode] = useState<RecordKind>('item')
   const [isLoading, setIsLoading] = useState(true)
+  const [showWelcome, setShowWelcome] = useState(false)
+  const [starting, setStarting] = useState(false)
+  const [storageUnavailable, setStorageUnavailable] = useState(false)
   const [prefersDark, setPrefersDark] = useState(() =>
     window.matchMedia?.('(prefers-color-scheme: dark)').matches ?? false,
   )
@@ -273,41 +261,50 @@ function App() {
   const [appDialog, setAppDialog] = useState<AppDialogState | null>(null)
   const [appToast, setAppToast] = useState('')
   const importInputRef = useRef<HTMLInputElement>(null)
+  const importPending = useRef(false)
   const dialogResolverRef = useRef<((confirmed: boolean) => void) | null>(null)
   const toastTimerRef = useRef<number | null>(null)
+
+  useEffect(() => {
+    let timer: number
+    const refreshDate = () => {
+      window.clearTimeout(timer)
+      const now = new Date()
+      setTodayKey(toLocalDateKey(now))
+      const nextMidnight = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1)
+      timer = window.setTimeout(refreshDate, nextMidnight.getTime() - now.getTime() + 100)
+    }
+    const handleVisibility = () => {
+      if (document.visibilityState === 'visible') refreshDate()
+    }
+
+    refreshDate()
+    window.addEventListener('focus', refreshDate)
+    document.addEventListener('visibilitychange', handleVisibility)
+    return () => {
+      window.clearTimeout(timer)
+      window.removeEventListener('focus', refreshDate)
+      document.removeEventListener('visibilitychange', handleVisibility)
+    }
+  }, [])
 
   useEffect(() => {
     async function hydrate() {
       const minimumSplash = new Promise((resolve) => window.setTimeout(resolve, 850))
       const [storedAssets, storedSettings] = await Promise.all([loadAssets(), loadSettings()])
-      let nextAssets = storedAssets
-      let nextSettings = storedSettings
-
       if (!storedSettings.hasSeededDemoData && storedAssets.length === 0) {
-        nextAssets = createDemoAssets()
-        nextSettings = { ...storedSettings, hasSeededDemoData: true }
-        await Promise.all([saveAssets(nextAssets), saveSettings(nextSettings)])
-      } else if (
-        storedSettings.hasSeededDemoData &&
-        storedAssets.some((asset) => asset.id.startsWith('demo-')) &&
-        !storedAssets.some((asset) => asset.id === 'demo-fridge')
-      ) {
-        nextAssets = [
-          ...storedAssets.filter((asset) => !asset.id.startsWith('demo-')),
-          ...createDemoAssets(),
-        ]
-        await saveAssets(nextAssets)
+        setShowWelcome(true)
       }
 
-      setAssets(nextAssets)
-      setSettings(nextSettings)
+      setAssets(storedAssets)
+      setSettings(storedSettings)
       await minimumSplash
       setIsLoading(false)
     }
 
     hydrate().catch(async () => {
       await new Promise((resolve) => window.setTimeout(resolve, 850))
-      setSettings(defaultSettings)
+      setStorageUnavailable(true)
       setIsLoading(false)
     })
   }, [])
@@ -343,41 +340,49 @@ function App() {
   useEffect(() => {
     const isDark = resolvedTheme === 'dark'
     const backgroundColor = isDark ? '#111914' : '#F6F5F1'
+    const isIos = Capacitor.getPlatform() === 'ios'
+    const followSystem = isIos && settings.theme === 'system'
+    const statusBarStyle = isDark ? Style.Dark : Style.Light
 
     document.documentElement.style.setProperty('--resolved-app-bg', backgroundColor)
     document.querySelector('meta[name="theme-color"]')?.setAttribute('content', backgroundColor)
     ;(window as ZhiwuWindow).ZhiwuSystemBars?.setDarkMode(isDark)
     StatusBar.setOverlaysWebView({ overlay: true }).catch(() => undefined)
     StatusBar.setBackgroundColor({ color: backgroundColor }).catch(() => undefined)
-    StatusBar.setStyle({ style: isDark ? Style.Dark : Style.Light }).catch(() => undefined)
-  }, [resolvedTheme])
+    StatusBar.setStyle({ style: followSystem ? Style.Default : statusBarStyle }).catch(() => undefined)
+    if (isIos) {
+      void IosNative.setAppearance({ dark: isDark, followSystem }).catch(() => undefined)
+      const keyboardStyle = isDark ? KeyboardStyle.Dark : KeyboardStyle.Light
+      void Keyboard.setStyle({ style: followSystem ? KeyboardStyle.Default : keyboardStyle }).catch(() => undefined)
+    }
+  }, [resolvedTheme, settings.theme])
 
   const computedAssets = useMemo(
     () => assets.filter((asset) => asset.kind !== 'service').map((asset) => computeAsset(asset, settings, todayKey)),
-    [assets, settings],
+    [assets, settings, todayKey],
   )
   const computedServices = useMemo(
     () => assets.filter((asset) => asset.kind === 'service').map((asset) => computeService(asset, todayKey)),
-    [assets],
+    [assets, todayKey],
   )
   const activeCategoryGroups = useMemo(
-    () => getCategoryGroups(settings.customSubcategories).filter((group) => mvpCategories.includes(group.name)),
+    () => getSelectableCategoryGroups(settings.customSubcategories),
     [settings.customSubcategories],
   )
   const summary = useMemo(
     () => summarizePortfolio(assets.filter((asset) => asset.kind !== 'service'), settings, todayKey),
-    [assets, settings],
+    [assets, settings, todayKey],
   )
   const serviceSummary = useMemo(
     () => summarizeServices(assets, todayKey),
-    [assets],
+    [assets, todayKey],
   )
   const visibleAssets = useMemo(() => {
     const filtered = filterAssets(assets.filter((asset) => asset.kind !== 'service'), search, category)
     const computed = filtered.map((asset) => computeAsset(asset, settings, todayKey))
 
     return sortComputedAssets(computed, sortKey)
-  }, [assets, category, search, settings, sortKey])
+  }, [assets, category, search, settings, sortKey, todayKey])
   const visibleServices = useMemo(
     () => filterAndSortServices(computedServices, search, serviceCategoryFilter, serviceSortKey),
     [computedServices, search, serviceCategoryFilter, serviceSortKey],
@@ -391,13 +396,13 @@ function App() {
     [computedServices, selectedId],
   )
 
-  const showAppToast = useCallback((message: string) => {
+  const showAppToast = useCallback((message: string, duration = 2600) => {
     setAppToast(message)
     if (toastTimerRef.current !== null) window.clearTimeout(toastTimerRef.current)
     toastTimerRef.current = window.setTimeout(() => {
       setAppToast('')
       toastTimerRef.current = null
-    }, 2600)
+    }, duration)
   }, [])
 
   useEffect(() => {
@@ -429,33 +434,60 @@ function App() {
   }, [])
 
   async function updateSettings(nextSettings: Settings) {
-    setSettings(nextSettings)
-    await saveSettings(nextSettings)
+    try {
+      await saveSettings(nextSettings)
+      setSettings(nextSettings)
+      return true
+    } catch {
+      await requestAppDialog({ title: '设置未保存', message: '请检查设备存储空间后重试。', confirmLabel: '知道了' })
+      return false
+    }
   }
 
-  async function handleAddCustomSubcategory(category: Category, name: string, emoji: string) {
+  async function handleAddCustomSubcategory(category: Category, name: string, previousName?: string) {
     const cleanName = name.trim()
-    const cleanEmoji = emoji.trim() || '✨'
 
     if (!cleanName) return null
 
-    const activeGroup = getCategoryGroups(settings.customSubcategories).find((group) => group.name === category)
-    const existing = activeGroup?.items.find((item) => item.name === cleanName)
+    const builtIn = getSubcategoryMeta(cleanName, [], category)
+    if (builtIn.iconKey && builtIn.category !== category) return null
 
-    if (existing) return existing.name
+    const activeGroup = getCategoryGroups(settings.customSubcategories).find((group) => group.name === category)
+    const existing = activeGroup?.items.find((item) => item.name !== previousName && (
+      item.name === cleanName || getSubcategoryDisplayName(category, item.name, settings.customSubcategories) === cleanName
+    ))
+
+    if (existing && cleanName !== previousName) return null
+    const previous = settings.customSubcategories.find((item) => item.category === category && item.name === previousName)
+    if (previousName !== undefined && !previous) return null
+    if (previousName !== undefined && getSubcategoryMeta(previousName, [], category).iconKey) return null
 
     const nextItem: CustomSubcategory = {
       category,
       name: cleanName,
-      emoji: cleanEmoji,
+      emoji: previous?.emoji ?? '📦',
+      ...(previous?.iconKey ? { iconKey: previous.iconKey } : {}),
     }
     const nextSettings = {
       ...settings,
-      customSubcategories: [...settings.customSubcategories, nextItem],
+      customSubcategories: previous
+        ? settings.customSubcategories.map((item) => item === previous ? nextItem : item)
+        : [...settings.customSubcategories, nextItem],
     }
 
-    await updateSettings(nextSettings)
-    return nextItem.name
+    if (previous) {
+      try {
+        await updateCustomSubcategory({ category, name: previous.name }, nextItem, nextSettings)
+        setSettings(nextSettings)
+        setAssets((current) => current.map((asset) => asset.kind !== 'service'
+          && asset.category === category && asset.subcategory === previous.name
+          ? { ...asset, subcategory: nextItem.name } : asset))
+        return nextItem.name
+      } catch {
+        return null
+      }
+    }
+    return await updateSettings(nextSettings) ? nextItem.name : null
   }
 
   function openCreateForm(
@@ -472,7 +504,9 @@ function App() {
   }
 
   function openEditForm(asset: Asset) {
-    const editableBillingMode = normalizeBillingModeForForm(asset)
+    // Computed services expose a projected renewal date; editing must use the
+    // original record so opening the form cannot silently change its schedule.
+    asset = assets.find((stored) => stored.id === asset.id) ?? asset
 
     setEditingId(asset.id)
     setFormValues({
@@ -486,9 +520,9 @@ function App() {
       photoDataUrl: asset.photoDataUrl,
       note: asset.note,
       serviceCategory: asset.serviceCategory ?? '其他',
-      billingMode: editableBillingMode,
-      serviceAmountCny: String(normalizeServiceAmountForForm(asset)),
-      billingCycle: editableBillingMode === 'yearly' ? 'yearly' : editableBillingMode === 'monthly' ? 'monthly' : 'custom',
+      billingMode: asset.billingMode ?? 'subscription',
+      serviceAmountCny: String(asset.serviceAmountCny ?? 0),
+      billingCycle: asset.billingCycle ?? 'monthly',
       nextEventDate: asset.nextEventDate ?? '',
       autoRenew: asset.autoRenew !== false,
       reminderDays: String(asset.reminderDays ?? 3),
@@ -539,6 +573,11 @@ function App() {
       const amountText = formValues.serviceAmountCny.trim()
       const isFreeService = formValues.billingMode === 'free'
       const serviceAmountCny = isFreeService ? 0 : amountText ? Number(amountText) : 0
+      const existingService = assets.find((asset) => asset.id === editingId)
+      const unchangedLegacyZero = ['subscription', 'fixed', 'credit', 'usage'].includes(formValues.billingMode)
+        && existingService?.billingMode === formValues.billingMode
+        && existingService.serviceAmountCny === 0
+        && serviceAmountCny === 0
 
       if (!isFreeService && !amountText) {
         setFormError(
@@ -549,7 +588,7 @@ function App() {
         return
       }
 
-      if (!isFreeService && (!Number.isFinite(serviceAmountCny) || serviceAmountCny <= 0)) {
+      if (!isFreeService && (!Number.isFinite(serviceAmountCny) || (serviceAmountCny <= 0 && !unchangedLegacyZero))) {
         setFormError('服务费用必须大于 0')
         return
       }
@@ -572,7 +611,7 @@ function App() {
       const now = new Date().toISOString()
       const existing = assets.find((asset) => asset.id === editingId)
       const nextService: Asset = {
-        id: existing?.id ?? crypto.randomUUID(),
+        id: existing?.id ?? createAssetId(),
         name,
         kind: 'service',
         category: '其他',
@@ -585,12 +624,7 @@ function App() {
         serviceCategory: formValues.serviceCategory,
         billingMode: formValues.billingMode,
         serviceAmountCny,
-        billingCycle:
-          formValues.billingMode === 'monthly'
-            ? 'monthly'
-            : formValues.billingMode === 'yearly'
-              ? 'yearly'
-              : 'custom',
+        billingCycle: formValues.billingCycle,
         nextEventDate: formValues.nextEventDate,
         autoRenew: isRecurringBillingMode(formValues.billingMode) ? formValues.autoRenew : false,
         reminderDays: Math.max(0, Number(formValues.reminderDays) || 0),
@@ -600,12 +634,18 @@ function App() {
         updatedAt: now,
       }
 
-      await saveAsset(nextService)
+      try {
+        await saveAsset(nextService)
+      } catch {
+        setFormError('保存失败，请检查设备存储空间后重试。')
+        return
+      }
       setAssets((current) => [nextService, ...current.filter((asset) => asset.id !== nextService.id)])
       setSelectedId(null)
       setHomeMode('service')
       setActiveTab('home')
       resetFormImmediately()
+      showAppToast(existing ? '已保存' : '已添加', 1700)
       return
     }
 
@@ -635,7 +675,7 @@ function App() {
       ? purchasePriceCny
       : existing?.purchasePriceCny ?? 0
     const nextAsset: Asset = {
-      id: existing?.id ?? crypto.randomUUID(),
+      id: existing?.id ?? createAssetId(),
       name,
       kind: 'item',
       category: formValues.category,
@@ -649,7 +689,12 @@ function App() {
       updatedAt: now,
     }
 
-    await saveAsset(nextAsset)
+    try {
+      await saveAsset(nextAsset)
+    } catch {
+      setFormError('保存失败，请检查设备存储空间后重试。')
+      return
+    }
     setAssets((current) => {
       const withoutExisting = current.filter((asset) => asset.id !== nextAsset.id)
       return [nextAsset, ...withoutExisting]
@@ -658,6 +703,7 @@ function App() {
     setHomeMode('item')
     setActiveTab('home')
     resetFormImmediately()
+    showAppToast(existing ? '已保存' : '已添加', 1700)
   }
 
   async function handleDeleteAsset(assetId: string) {
@@ -670,35 +716,69 @@ function App() {
     })
     if (!confirmed) return
 
-    await deleteAsset(assetId)
+    try {
+      await deleteAsset(assetId)
+    } catch {
+      await requestAppDialog({ title: '删除失败', message: '记录未能删除，请重试。', confirmLabel: '知道了' })
+      return
+    }
     setAssets((current) => current.filter((asset) => asset.id !== assetId))
     setSelectedId(null)
   }
 
+  async function exportFile(filename: string, text: string, type: string, label: string) {
+    try {
+      const result = await downloadTextFile(filename, text, type)
+      showAppToast(result === 'saved' ? `${label}已保存` : result === 'cancelled' ? '已取消导出' : `正在导出 ${label}`)
+    } catch {
+      await requestAppDialog({ title: '导出失败', message: '文件未能保存，请检查可用存储空间后重试。', confirmLabel: '知道了' })
+    }
+  }
+
   function handleJsonExport() {
     const backup = createBackup(assets, settings)
-    downloadTextFile(
+    void exportFile(
       `知物备份-${toLocalDateKey()}.json`,
       JSON.stringify(backup, null, 2),
       'application/json;charset=utf-8',
+      'JSON 备份',
     )
-    showAppToast('正在导出 JSON 备份')
   }
 
   function handleCsvExport() {
-    downloadTextFile(`知物清单-${toLocalDateKey()}.csv`, buildCsv(assets), 'text/csv;charset=utf-8')
-    showAppToast('正在导出 CSV 清单')
+    void exportFile(`知物清单-${toLocalDateKey()}.csv`, buildCsv(assets), 'text/csv;charset=utf-8', 'CSV 清单')
   }
 
-  async function handleImport(file: File | undefined) {
-    if (!file) return
+  function chooseBackupFile() {
+    if (Capacitor.getPlatform() !== 'ios') {
+      importInputRef.current?.click()
+      return
+    }
+    void handleImport(async () => {
+      const result = await IosNative.pickBackupFile()
+      return result.status === 'selected' ? result.text : undefined
+    })
+  }
 
+  async function handleImport(readText: () => Promise<string | undefined>) {
+    if (importPending.current) return
+    importPending.current = true
     try {
-      const parsed = parseBackup(JSON.parse(await file.text()))
+      const text = await readText()
+      if (text === undefined) return
+      let raw: unknown
+      try {
+        raw = JSON.parse(text.replace(/^\uFEFF/, ''))
+      } catch {
+        throw new Error('无法读取 JSON 备份文件，请确认选择的是完整的知物备份。')
+      }
+      const parsed = parseBackup(raw)
+      const itemCount = parsed.assets.filter((asset) => asset.kind !== 'service').length
+      const serviceCount = parsed.assets.length - itemCount
 
       const confirmed = await requestAppDialog({
         title: '替换当前数据？',
-        message: '导入备份会覆盖当前的物品、服务和设置，建议先导出一份备份。',
+        message: `备份包含 ${itemCount} 条物品、${serviceCount} 条服务。导入将覆盖当前 ${assets.length} 条记录和设置，建议先导出当前数据的 JSON 备份。`,
         confirmLabel: '继续导入',
         cancelLabel: '取消',
         danger: true,
@@ -718,6 +798,7 @@ function App() {
         confirmLabel: '知道了',
       })
     } finally {
+      importPending.current = false
       if (importInputRef.current) importInputRef.current.value = ''
     }
   }
@@ -725,25 +806,47 @@ function App() {
   async function handleClearDemo() {
     const confirmed = await requestAppDialog({
       title: '清空示例数据？',
-      message: '只会移除应用自带的示例，不会删除你自己添加的记录。',
+      message: '只会移除应用自带的示例（包括修改过的示例），不会删除你自己添加的记录。',
       confirmLabel: '清空示例',
       cancelLabel: '取消',
       danger: true,
     })
     if (!confirmed) return
 
-    const nextAssets = assets.filter((asset) => !asset.id.startsWith('demo-'))
-
-    await replaceAssets(nextAssets)
+    let nextAssets: Asset[]
+    try {
+      nextAssets = await clearDemoAssets()
+    } catch {
+      await requestAppDialog({ title: '清理失败', message: '示例未能清理，请重试。', confirmLabel: '知道了' })
+      return
+    }
     setAssets(nextAssets)
     setSelectedId(null)
     showAppToast('示例数据已清空')
   }
 
+  async function handleWelcomeChoice(withDemo: boolean) {
+    if (starting) return
+    setStarting(true)
+    try {
+      const result = await initializeFreshData(withDemo ? createDemoAssets() : [])
+      setAssets(result.assets)
+      setSettings(result.settings)
+      setShowWelcome(false)
+      if (!withDemo && result.initialized) openCreateForm('item')
+    } catch {
+      await requestAppDialog({ title: '无法保存设置', message: '请检查设备存储空间后重试。你的数据没有被清空。', confirmLabel: '知道了' })
+    } finally {
+      setStarting(false)
+    }
+  }
+
   const formOpen = editingId !== null || formValues !== emptyForm
+  const mainScreenCovered = showWelcome || formOpen || Boolean(selectedAsset || selectedService)
   const topbarMode = activeTab === 'home' ? homeMode : activeTab === 'assets' ? recordsMode : 'item'
 
   useEffect(() => {
+    if (Capacitor.getPlatform() !== 'android') return
     const listener = CapacitorApp.addListener('backButton', () => {
       if (closingLayer) return
       if (appDialog) {
@@ -775,9 +878,23 @@ function App() {
     }
   }, [activeTab, appDialog, closeDetail, closeForm, closingLayer, formOpen, selectedAsset, selectedService, settleAppDialog])
 
+  if (storageUnavailable && !isLoading) {
+    return (
+      <main className="startup-error" role="alert">
+        <h1>无法读取本地数据</h1>
+        <p>请关闭应用后重试。为避免数据丢失，请勿清除应用数据或卸载应用。</p>
+        <button type="button" onClick={() => window.location.reload()}>重新尝试</button>
+      </main>
+    )
+  }
+
   return (
-    <div className="app-frame">
-      <div className={isLoading ? 'app-shell splash-shell' : 'app-shell'}>
+    <div className="app-frame" inert={Boolean(appDialog)} aria-hidden={appDialog ? true : undefined}>
+      <div
+        className={isLoading ? 'app-shell splash-shell' : 'app-shell'}
+        inert={mainScreenCovered}
+        aria-hidden={mainScreenCovered || undefined}
+      >
         {!isLoading && (
           <header className="topbar">
             <div className={activeTab === 'settings' ? 'topbar-brand settings-brand' : 'topbar-brand'}>
@@ -797,6 +914,12 @@ function App() {
               </button>
             )}
           </header>
+        )}
+        {!isLoading && assets.some((asset) => asset.id.startsWith('demo-')) && (
+          <div className="demo-notice" role="status">
+            <span>含示例数据，已计入统计</span>
+            <button type="button" onClick={handleClearDemo}>清空示例</button>
+          </div>
         )}
 
         <main
@@ -865,7 +988,7 @@ function App() {
                   onThemeChange={(theme) => updateSettings({ ...settings, theme })}
                   onJsonExport={handleJsonExport}
                   onCsvExport={handleCsvExport}
-                  onImportClick={() => importInputRef.current?.click()}
+                  onImportClick={chooseBackupFile}
                   onClearDemo={handleClearDemo}
                   hasDemoAssets={assets.some((asset) => asset.id.startsWith('demo-'))}
                 />
@@ -885,18 +1008,38 @@ function App() {
 
       <input
         ref={importInputRef}
-        className="visually-hidden"
+        hidden
         type="file"
         accept="application/json"
-        onChange={(event) => handleImport(event.target.files?.[0])}
+        onChange={(event) => {
+          const file = event.target.files?.[0]
+          if (file) void handleImport(() => file.text())
+        }}
       />
+
+      {showWelcome && !isLoading && (
+        <div className="app-dialog-backdrop">
+          <section className="app-dialog welcome-dialog" role="dialog" aria-modal="true" aria-labelledby="welcome-title">
+            <div className="app-dialog-copy">
+              <h2 id="welcome-title">欢迎使用知物</h2>
+              <p>记录物品陪伴的时间，管理服务的期限。数据保存在当前设备，请定期备份。</p>
+            </div>
+            <div className="app-dialog-actions">
+              <button type="button" disabled={starting} onClick={() => void handleWelcomeChoice(true)}>看看示例</button>
+              <button className="primary" type="button" disabled={starting} onClick={() => void handleWelcomeChoice(false)}>开始记录</button>
+            </div>
+          </section>
+        </div>
+      )}
 
       {formOpen && (
         <AssetForm
           values={formValues}
+          todayKey={todayKey}
           error={formError}
           isEditing={editingId !== null}
           categoryGroups={activeCategoryGroups}
+          customSubcategories={settings.customSubcategories}
           onChange={setFormValues}
           onClose={closeForm}
           onSave={handleSaveAsset}
@@ -926,8 +1069,9 @@ function App() {
         />
       )}
 
-      {appDialog && (
-        <ThemedDialog dialog={appDialog} onResult={settleAppDialog} />
+      {appDialog && createPortal(
+        <ThemedDialog dialog={appDialog} onResult={settleAppDialog} />,
+        document.body,
       )}
       {appToast && <AppToast message={appToast} />}
     </div>
@@ -964,9 +1108,11 @@ function HomeView({
 
     return aDays - bDays
   })
+  const longestHeldAsset = assets.reduce<ComputedAsset | null>((longest, asset) => {
+    if (asset.daysHeld === null) return longest
+    return longest === null || asset.daysHeld > (longest.daysHeld ?? -1) ? asset : longest
+  }, null)
   const insightAsset = summary.leastValue ?? summary.bestValue
-  const dailyCostScale = summary.totalDailyCost >= 10000 ? 'dense' : summary.totalDailyCost >= 1000 ? 'compact' : ''
-  const dailyCostText = formatDailyCny(summary.totalDailyCost).replace('/天', '')
   const totalValueText = formatCny(summary.totalPurchase).replace(/\.00$/, '')
   const recentYearValueText = formatCny(summary.recentYearPurchase).replace(/\.00$/, '')
   const timelineServices = sortServicesByEvent(services)
@@ -1112,11 +1258,16 @@ function HomeView({
           <div className="home-fixed-region home-mode-summary">
             <div className="overview-panel">
               <div className="overview-main">
-                <span>日均持有成本</span>
-                <strong className={dailyCostScale}>
-                  <span>{dailyCostText}</span>
-                  <small>/天</small>
-                </strong>
+                <span>陪伴最久</span>
+                {longestHeldAsset ? (
+                  <>
+                    <strong>
+                      <span>{longestHeldAsset.daysHeld?.toLocaleString('zh-CN')}</span>
+                      <small>天</small>
+                    </strong>
+                    <p className="overview-item-name user-copyable" title={longestHeldAsset.name}>{longestHeldAsset.name}</p>
+                  </>
+                ) : <p className="overview-item-empty">记录拥有日期，开启时间线</p>}
               </div>
               <div className="overview-meta">
                 <span>
@@ -1137,7 +1288,7 @@ function HomeView({
                 </span>
                 <span className="time-insight-copy">
                   <strong>{insightAsset.name}</strong>
-                  <small>当前日均持有成本最高，按购入金额和持有天数计算。</small>
+                  <small>当前日均持有成本最高。</small>
                 </span>
                 <ChevronRight size={18} aria-hidden="true" />
               </button>
@@ -1322,15 +1473,15 @@ function RecordsView({
             type="button"
             onClick={() => isService ? onServiceCategory(item) : onCategory(item)}
           >
-            {item}
+            {isService ? item : getCategoryDisplayName(item)}
           </button>
         ))}
       </div>
 
       {isService ? (
-        <SortControl value={serviceSortKey} options={serviceSortOptions} onChange={onServiceSort} />
+        <SortControl key="service" value={serviceSortKey} options={serviceSortOptions} onChange={onServiceSort} />
       ) : (
-        <SortControl value={sortKey} options={itemSortOptions} onChange={onSort} />
+        <SortControl key="item" value={sortKey} options={itemSortOptions} onChange={onSort} />
       )}
 
       {!isService && assets.length ? (
@@ -1370,11 +1521,34 @@ function SortControl<T extends string>({
   onChange: (value: T) => void
 }) {
   const [isOpen, setIsOpen] = useState(false)
+  const controlRef = useRef<HTMLDivElement>(null)
+  const triggerRef = useRef<HTMLButtonElement>(null)
   const activeLabel = options.find((option) => option.value === value)?.label ?? options[0]?.label
 
+  useEffect(() => {
+    if (!isOpen) return
+
+    const closeOnOutsidePress = (event: PointerEvent) => {
+      if (!controlRef.current?.contains(event.target as Node)) setIsOpen(false)
+    }
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setIsOpen(false)
+        triggerRef.current?.focus()
+      }
+    }
+    document.addEventListener('pointerdown', closeOnOutsidePress)
+    document.addEventListener('keydown', closeOnEscape)
+    return () => {
+      document.removeEventListener('pointerdown', closeOnOutsidePress)
+      document.removeEventListener('keydown', closeOnEscape)
+    }
+  }, [isOpen])
+
   return (
-    <div className="sort-control">
+    <div className="sort-control" ref={controlRef}>
       <button
+        ref={triggerRef}
         className="select-row sort-trigger"
         type="button"
         aria-haspopup="listbox"
@@ -1385,26 +1559,30 @@ function SortControl<T extends string>({
         <span>{activeLabel}</span>
         <ChevronDown className={isOpen ? 'rotated' : ''} size={17} />
       </button>
-      {isOpen && (
-        <div className="sort-options" role="listbox" aria-label="排序方式">
-          {options.map((option) => (
-            <button
-              key={option.value}
-              className={option.value === value ? 'active' : ''}
-              type="button"
-              role="option"
-              aria-selected={option.value === value}
-              onClick={() => {
-                onChange(option.value)
-                setIsOpen(false)
-              }}
-            >
-              <span>{option.label}</span>
-              {option.value === value && <Check size={16} />}
-            </button>
-          ))}
-        </div>
-      )}
+      <div
+        className={isOpen ? 'sort-options is-open' : 'sort-options'}
+        role="listbox"
+        aria-label="排序方式"
+        aria-hidden={!isOpen}
+        inert={!isOpen}
+      >
+        {options.map((option) => (
+          <button
+            key={option.value}
+            className={option.value === value ? 'active' : ''}
+            type="button"
+            role="option"
+            aria-selected={option.value === value}
+            onClick={() => {
+              onChange(option.value)
+              setIsOpen(false)
+            }}
+          >
+            <span>{option.label}</span>
+            {option.value === value && <Check size={16} />}
+          </button>
+        ))}
+      </div>
     </div>
   )
 }
@@ -1471,30 +1649,35 @@ function SettingsView({
           </button>
         </div>
       </div>
+      <AboutSettings />
     </section>
   )
 }
 
 function AssetForm({
   values,
+  todayKey,
   error,
   isEditing,
   isClosing,
   categoryGroups,
+  customSubcategories,
   onChange,
   onClose,
   onSave,
   onAddCustomSubcategory,
 }: {
   values: AssetFormValues
+  todayKey: string
   error: string
   isEditing: boolean
   isClosing: boolean
   categoryGroups: ReturnType<typeof getCategoryGroups>
+  customSubcategories: CustomSubcategory[]
   onChange: (values: AssetFormValues) => void
   onClose: () => void
   onSave: () => void
-  onAddCustomSubcategory: (category: Category, name: string, emoji: string) => Promise<Subcategory | null>
+  onAddCustomSubcategory: (category: Category, name: string, previousName?: string) => Promise<Subcategory | null>
 }) {
   const recordLabel = values.kind === 'service' ? '服务' : '物品'
 
@@ -1547,6 +1730,7 @@ function AssetForm({
                 <span>分类</span>
                 <CategoryPicker
                   groups={categoryGroups}
+                  customSubcategories={customSubcategories}
                   category={values.category}
                   subcategory={values.subcategory}
                   onChange={(nextCategory, nextSubcategory) =>
@@ -1603,7 +1787,7 @@ function AssetForm({
               </label>
             </>
           ) : (
-            <ServiceFormContent values={values} onChange={onChange} />
+            <ServiceFormContent values={values} todayKey={todayKey} onChange={onChange} />
           )}
         </div>
 
@@ -1621,19 +1805,26 @@ function AssetForm({
 
 function ServiceFormContent({
   values,
+  todayKey,
   onChange,
 }: {
   values: AssetFormValues
+  todayKey: string
   onChange: (values: AssetFormValues) => void
 }) {
-  const isRecurring = values.billingMode === 'monthly' || values.billingMode === 'yearly'
+  const isRecurring = isRecurringBillingMode(values.billingMode)
   const isOneTime = values.billingMode === 'one-time'
   const isFree = values.billingMode === 'free'
+  const isLegacy = !['monthly', 'yearly', 'one-time', 'free'].includes(values.billingMode)
   const amountLabel = values.billingMode === 'monthly'
     ? '每月费用'
     : values.billingMode === 'yearly'
       ? '每年费用'
-      : '已付金额'
+      : values.billingMode === 'subscription'
+        ? '每周期费用'
+        : values.billingMode === 'usage'
+          ? '按量费用'
+          : '已付金额'
 
   function changeBilling(billingMode: BillingMode) {
     onChange({
@@ -1699,6 +1890,12 @@ function ServiceFormContent({
               {label}
             </button>
           ))}
+          {isLegacy && (
+            <button className="active" type="button" aria-pressed="true">
+              {billingModeLabels[values.billingMode]}
+              {values.billingMode === 'subscription' ? `（${billingCycleLabels[values.billingCycle]}）` : ''}
+            </button>
+          )}
         </div>
       </div>
 
@@ -1716,7 +1913,7 @@ function ServiceFormContent({
                 onChange={(event) => onChange({ ...values, serviceAmountCny: event.target.value })}
               />
               <span className="service-cost-unit">
-                {values.billingMode === 'monthly' ? '/月' : values.billingMode === 'yearly' ? '/年' : '一次性'}
+                {values.billingMode === 'monthly' ? '/月' : values.billingMode === 'yearly' ? '/年' : values.billingMode === 'subscription' ? '/周期' : values.billingMode === 'usage' ? '按量' : '一次性'}
               </span>
             </div>
           </label>
@@ -1781,6 +1978,17 @@ function ServiceFormContent({
             />
           </div>
         )}
+
+        {isLegacy && !isRecurring && (
+          <div className="service-row-field">
+            <span>关键日期 <em>（可选）</em></span>
+            <ThemeDatePicker
+              label="关键日期"
+              value={values.nextEventDate}
+              onChange={(nextEventDate) => onChange({ ...values, nextEventDate })}
+            />
+          </div>
+        )}
       </div>
 
       <p className="service-form-hint">
@@ -1789,7 +1997,7 @@ function ServiceFormContent({
             ? `首页将按该日期显示${values.autoRenew ? '扣款' : '到期'}日程`
             : '补充日期后，可在首页查看续费与到期日程'
           : values.nextEventDate
-            ? '日均成本将按购买或有效期限换算'
+            ? '可在首页查看到期日程'
             : '不填写到期日即视为长期有效'}
       </p>
 
@@ -1809,7 +2017,7 @@ function ServiceFormContent({
 
         {values.showMoreServiceFields && (
           <div className="service-more-fields">
-            {isRecurring && <div className="service-row-field">
+            {(isRecurring || isLegacy) && <div className="service-row-field">
               <span>开始日期 <em>（可选）</em></span>
               <ThemeDatePicker
                 label="开始日期"
@@ -1898,16 +2106,16 @@ function AssetDetail({
         </div>
 
         <div className="detail-hero">
-          <CategoryEmblem subcategory={asset.subcategory} customSubcategories={customSubcategories} size="detail" />
+          <CategoryEmblem category={asset.category} subcategory={asset.subcategory} customSubcategories={customSubcategories} size="detail" />
           <div className="detail-hero-copy">
-            <span>{asset.subcategory}</span>
+            <span>{getSubcategoryDisplayName(asset.category, asset.subcategory, customSubcategories)}</span>
             <strong>{asset.valueTrackingEnabled ? formatAssetDailyCost(asset) : '仅收藏'}</strong>
             <em>{formatHeldText(asset)}</em>
           </div>
         </div>
 
         <div className="detail-list">
-          <DetailRow label="分类" value={`${asset.category} / ${asset.subcategory}`} />
+          <DetailRow label="分类" value={`${getCategoryDisplayName(asset.category)} / ${getSubcategoryDisplayName(asset.category, asset.subcategory, customSubcategories)}`} />
           <DetailRow label="日均计算" value={asset.valueTrackingEnabled ? '开启' : '关闭'} />
           {asset.purchaseDate && <DetailRow label="开始日期" value={asset.purchaseDate} copyable />}
           {asset.valueTrackingEnabled && (
@@ -2031,11 +2239,11 @@ function AssetCard({
 }) {
   return (
     <button className="asset-card" type="button" onClick={() => onOpen(asset.id)}>
-      <CategoryEmblem subcategory={asset.subcategory} customSubcategories={customSubcategories} />
+      <CategoryEmblem category={asset.category} subcategory={asset.subcategory} customSubcategories={customSubcategories} />
       <div className="asset-card-body">
         <div>
           <h3 className="user-copyable">{asset.name}</h3>
-          <p>{asset.subcategory} · {asset.valueTrackingEnabled ? formatCny(asset.purchasePriceCny) : '仅收藏'} · {formatHeldText(asset)}</p>
+          <p>{getSubcategoryDisplayName(asset.category, asset.subcategory, customSubcategories)} · {asset.valueTrackingEnabled ? formatCny(asset.purchasePriceCny) : '仅收藏'} · {formatHeldText(asset)}</p>
         </div>
         <strong>{asset.valueTrackingEnabled ? formatAssetDailyCost(asset) : '仅收藏'}</strong>
       </div>
@@ -2135,7 +2343,7 @@ function TimelineRow({
         onClick={() => onOpen(asset.id)}
         aria-label={`${asset.name}，${formatHeldText(asset)}，${asset.valueTrackingEnabled ? formatAssetDailyCost(asset) : '仅收藏'}`}
       >
-        <CategoryEmblem subcategory={asset.subcategory} customSubcategories={customSubcategories} size="collection" />
+        <CategoryEmblem category={asset.category} subcategory={asset.subcategory} customSubcategories={customSubcategories} size="collection" />
         <div className="timeline-copy">
           <h3 className={`${usesCompactName ? 'compact-name ' : ''}user-copyable`}>{displayName}</h3>
           <span className="timeline-records">
@@ -2217,26 +2425,44 @@ function ServiceCategoryIcon({
 
 function CategoryPicker({
   groups,
+  customSubcategories,
   category,
   subcategory,
   onChange,
   onAddCustomSubcategory,
 }: {
   groups: ReturnType<typeof getCategoryGroups>
+  customSubcategories: CustomSubcategory[]
   category: Category
   subcategory: Subcategory
   onChange: (category: Category, subcategory: Subcategory) => void
-  onAddCustomSubcategory: (category: Category, name: string, emoji: string) => Promise<Subcategory | null>
+  onAddCustomSubcategory: (category: Category, name: string, previousName?: string) => Promise<Subcategory | null>
 }) {
   const [isAdding, setIsAdding] = useState(false)
-  const [customEmoji, setCustomEmoji] = useState('✨')
+  const [editingCustomName, setEditingCustomName] = useState<string | undefined>()
+  const [isSavingCustom, setIsSavingCustom] = useState(false)
+  const savingCustomRef = useRef(false)
   const [customName, setCustomName] = useState('')
   const [customError, setCustomError] = useState('')
   const [selectionSuppressed, setSelectionSuppressed] = useState(false)
   const [subcategoryPage, setSubcategoryPage] = useState(0)
   const categoryCarouselRef = useRef<HTMLDivElement>(null)
   const categoryScrollFrameRef = useRef<number | null>(null)
-  const activeGroup = groups.find((group) => group.name === category) ?? groups[0]
+  const pickerGroups = useMemo(() => {
+    if (groups.some((group) => group.name === category)) return groups
+    // Editing a historical group must never silently select a different kind.
+    const legacy = getCategoryGroups(customSubcategories).find((group) => group.name === category)
+    return legacy ? [...groups, legacy] : groups
+  }, [groups, category, customSubcategories])
+  const activeGroup = useMemo(() => {
+    const group = pickerGroups.find((candidate) => candidate.name === category) ?? pickerGroups[0]
+    if (group.items.some((item) => item.name === subcategory)) return group
+    const selected = getSubcategoryMeta(subcategory, customSubcategories, category)
+    return { ...group, items: [...group.items, selected] }
+  }, [pickerGroups, category, subcategory, customSubcategories])
+  const selectedCustom = getSubcategoryMeta(subcategory, [], activeGroup.name).iconKey
+    ? undefined
+    : customSubcategories.find((item) => item.category === activeGroup.name && item.name === subcategory)
   const categoryEntries: Array<
     { kind: 'item'; item: CategoryItem } | { kind: 'add' }
   > = [
@@ -2296,7 +2522,7 @@ function CategoryPicker({
 
   function resetCustomForm() {
     setIsAdding(false)
-    setCustomEmoji('✨')
+    setEditingCustomName(undefined)
     setCustomName('')
     setCustomError('')
   }
@@ -2307,6 +2533,7 @@ function CategoryPicker({
   }
 
   async function handleSaveCustom() {
+    if (savingCustomRef.current) return
     const cleanName = customName.trim()
 
     if (!cleanName) {
@@ -2314,43 +2541,58 @@ function CategoryPicker({
       return
     }
 
-    const nextSubcategory = await onAddCustomSubcategory(activeGroup.name, cleanName, customEmoji)
-
-    if (!nextSubcategory) {
-      setCustomError('新种类没有保存成功')
+    const builtIn = getSubcategoryMeta(cleanName, [], activeGroup.name)
+    if (builtIn.iconKey && builtIn.category !== activeGroup.name) {
+      setCustomError(`${cleanName}已在${getCategoryDisplayName(builtIn.category)}中，请直接选择`)
       return
     }
 
-    onChange(activeGroup.name, nextSubcategory)
-    setIsAdding(false)
-    setCustomName('')
-    setCustomEmoji('✨')
-    setCustomError('')
-    setSelectionSuppressed(false)
+    if (cleanName !== editingCustomName && activeGroup.items.some((item) => item.name !== editingCustomName
+      && (item.name === cleanName || getSubcategoryDisplayName(activeGroup.name, item.name, customSubcategories) === cleanName))) {
+      setCustomError('已有同名种类，请直接选择或换个名称')
+      return
+    }
+
+    savingCustomRef.current = true
+    setIsSavingCustom(true)
+    try {
+      const nextSubcategory = await onAddCustomSubcategory(activeGroup.name, cleanName, editingCustomName)
+      if (!nextSubcategory) {
+        setCustomError('种类未保存，请重试')
+        return
+      }
+      onChange(activeGroup.name, nextSubcategory)
+      resetCustomForm()
+      setSelectionSuppressed(false)
+    } finally {
+      savingCustomRef.current = false
+      setIsSavingCustom(false)
+    }
   }
 
   return (
     <div className="category-picker" aria-label="选择分类">
       <div className="primary-tabs">
-        {groups.map((group) => (
+        {pickerGroups.map((group) => (
           <button
             key={group.name}
             className={group.name === category ? 'active' : ''}
             type="button"
+            disabled={isSavingCustom}
             onClick={() => {
               resetCustomForm()
               setSelectionSuppressed(false)
               onChange(group.name, getDefaultSubcategory(group.name))
             }}
           >
-            {group.name}
+            {getCategoryDisplayName(group.name)}
           </button>
         ))}
       </div>
       <div
         ref={categoryCarouselRef}
-        className="subcategory-carousel"
-        aria-label={`${activeGroup.name}分类，共${subcategoryPages.length}页`}
+        className={subcategoryPages.length === 1 ? 'subcategory-carousel single-page' : 'subcategory-carousel'}
+        aria-label={`${getCategoryDisplayName(activeGroup.name)}分类，共${subcategoryPages.length}页`}
         onScroll={handleSubcategoryScroll}
       >
         {subcategoryPages.map((page, pageIndex) => (
@@ -2364,6 +2606,7 @@ function CategoryPicker({
                 key={entry.item.name}
                 className={!isAdding && !selectionSuppressed && entry.item.name === subcategory ? 'category-option active' : 'category-option'}
                 type="button"
+                disabled={isSavingCustom}
                 onClick={() => {
                   resetCustomForm()
                   setSelectionSuppressed(false)
@@ -2373,19 +2616,26 @@ function CategoryPicker({
                 <span className="emoji-emblem small">
                   <CategoryIcon visual={entry.item} />
                 </span>
-                <span>{entry.item.name}</span>
+                <span>{getSubcategoryDisplayName(activeGroup.name, entry.item.name, customSubcategories)}
+                  {customSubcategories.some((item) => item.category === activeGroup.name && item.name === entry.item.name)
+                    && activeGroup.items.some((other) => other.name !== entry.item.name
+                    && getSubcategoryDisplayName(activeGroup.name, other.name, customSubcategories) === getSubcategoryDisplayName(activeGroup.name, entry.item.name, customSubcategories))
+                    ? '（自定义）' : ''}
+                </span>
               </button>
             ) : (
               <button
                 key="add-custom"
                 className={isAdding ? 'category-option add active' : 'category-option add'}
                 type="button"
+                disabled={isSavingCustom}
                 onClick={() => {
                   if (isAdding) {
                     closeCustomWithoutSelection()
                     return
                   }
 
+                  resetCustomForm()
                   setIsAdding(true)
                   setSelectionSuppressed(true)
                   setCustomError('')
@@ -2414,24 +2664,33 @@ function CategoryPicker({
           ))}
         </div>
       )}
+      {selectedCustom && !isAdding && !selectionSuppressed && (
+        <button
+          type="button"
+          className="edit-custom-category"
+          onClick={() => {
+            setEditingCustomName(selectedCustom.name)
+            setCustomName(selectedCustom.name)
+            setCustomError('')
+            setIsAdding(true)
+          }}
+        >
+          <Edit3 size={14} /> 编辑种类
+        </button>
+      )}
       {isAdding && (
-        <div className="custom-category-panel">
-          <div>
-            <label className="field compact">
-              <span>图标</span>
-              <input
-                className="emoji-input"
-                maxLength={2}
-                value={customEmoji}
-                onChange={(event) => setCustomEmoji(event.target.value)}
-              />
-            </label>
+        <div className="custom-category-panel" role="group" aria-label={editingCustomName ? '编辑自定义种类' : '新增自定义种类'}>
+          <div className="custom-category-fields">
+            <div className="custom-kind-preview" aria-hidden="true">
+              <CustomKindGlyph name={customName} />
+            </div>
             <label className="field compact grow">
               <span>种类名称</span>
               <input
                 maxLength={8}
-                placeholder="例如 手柄"
+                placeholder="例如 三脚架"
                 value={customName}
+                disabled={isSavingCustom}
                 onChange={(event) => {
                   setCustomName(event.target.value)
                   setCustomError('')
@@ -2439,13 +2698,13 @@ function CategoryPicker({
               />
             </label>
           </div>
-          {customError && <p>{customError}</p>}
+          {customError && <p role="alert">{customError}</p>}
           <div className="custom-category-actions">
-            <button type="button" onClick={closeCustomWithoutSelection}>
+            <button type="button" disabled={isSavingCustom} onClick={closeCustomWithoutSelection}>
               取消
             </button>
-            <button type="button" onClick={handleSaveCustom}>
-              添加
+            <button type="button" disabled={isSavingCustom} onClick={() => void handleSaveCustom()}>
+              {isSavingCustom ? '保存中…' : editingCustomName ? '保存种类' : '添加种类'}
             </button>
           </div>
         </div>
@@ -2455,15 +2714,17 @@ function CategoryPicker({
 }
 
 function CategoryEmblem({
+  category,
   subcategory,
   customSubcategories = [],
   size = 'regular',
 }: {
+  category: Category
   subcategory: Subcategory
   customSubcategories?: CustomSubcategory[]
   size?: 'regular' | 'collection' | 'detail'
 }) {
-  const visual = getSubcategoryMeta(subcategory, customSubcategories)
+  const visual = getSubcategoryMeta(subcategory, customSubcategories, category)
 
   return (
     <div className={`category-emblem ${size}`}>
@@ -2478,14 +2739,14 @@ function CategoryIcon({
   visual,
   variant = 'compact',
 }: {
-  visual: Pick<CategoryItem, 'emoji' | 'iconKey'>
+  visual: Pick<CategoryItem, 'name' | 'iconKey'>
   variant?: 'compact' | 'detail'
 }) {
   if (visual.iconKey) {
     return <ItemCategoryGlyph iconKey={visual.iconKey} variant={variant} />
   }
 
-  return <Package className="svg-glyph" size={variant === 'detail' ? 42 : 28} aria-hidden="true" />
+  return <CustomKindGlyph name={visual.name} variant={variant} />
 }
 
 function DetailRow({ label, value, copyable = false }: { label: string; value: string; copyable?: boolean }) {

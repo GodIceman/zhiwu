@@ -2,6 +2,8 @@ import 'fake-indexeddb/auto'
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import App from './App'
+import { createDemoAssets } from './lib/demo-data'
+import { clearDemoAssets, defaultSettings, initializeFreshData, loadAssets, replaceAllData } from './lib/storage'
 
 vi.mock('@capacitor/app', () => ({
   App: {
@@ -24,7 +26,8 @@ vi.mock('@capacitor/status-bar', () => ({
 }))
 
 describe('App startup', () => {
-  beforeEach(() => {
+  beforeEach(async () => {
+    await replaceAllData(createDemoAssets(), { ...defaultSettings, hasSeededDemoData: true })
     vi.stubGlobal('matchMedia', vi.fn(() => ({
       matches: false,
       media: '(prefers-color-scheme: dark)',
@@ -39,6 +42,57 @@ describe('App startup', () => {
       callback(0)
       return 1
     })
+  })
+
+  it('lets a new user start with an empty collection without inserting examples', async () => {
+    await replaceAllData([], defaultSettings)
+    render(<App />)
+
+    const welcome = await screen.findByRole('dialog', { name: '欢迎使用知物' }, { timeout: 2500 })
+    expect(screen.queryByRole('navigation', { name: '主导航' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: '新增物品' })).not.toBeInTheDocument()
+    expect(screen.getByTitle('新增物品').closest('.app-shell')).toHaveAttribute('inert')
+    expect(await loadAssets()).toHaveLength(0)
+    expect(screen.getByText('记录拥有日期，开启时间线')).toBeInTheDocument()
+    fireEvent.click(within(welcome).getByRole('button', { name: '开始记录' }))
+    const form = await screen.findByRole('dialog', { name: '新增物品' })
+    expect(screen.queryByRole('navigation', { name: '主导航' })).not.toBeInTheDocument()
+    const date = within(form).getByRole('button', { name: /^开始日期：/ })
+    fireEvent.click(date)
+    expect(screen.queryByRole('dialog', { name: '新增物品' })).not.toBeInTheDocument()
+    expect(form).toHaveAttribute('aria-hidden', 'true')
+    const calendar = screen.getByRole('dialog', { name: '选择开始日期' })
+    fireEvent.click(within(calendar).getByRole('button', { name: '取消' }))
+    expect(date).toHaveFocus()
+    expect(screen.getByRole('dialog', { name: '新增物品' })).toBe(form)
+    expect(await loadAssets()).toHaveLength(0)
+    expect(screen.queryByText('含示例数据，已计入统计')).not.toBeInTheDocument()
+  })
+
+  it('marks examples when a new user chooses to explore them', async () => {
+    await replaceAllData([], defaultSettings)
+    render(<App />)
+
+    const welcome = await screen.findByRole('dialog', { name: '欢迎使用知物' }, { timeout: 2500 })
+    fireEvent.click(within(welcome).getByRole('button', { name: '看看示例' }))
+    expect(await screen.findByText('含示例数据，已计入统计')).toBeInTheDocument()
+    expect(await loadAssets()).toHaveLength(7)
+  })
+
+  it('does not overwrite records added while another first-run screen is open', async () => {
+    const existing = { ...createDemoAssets()[0], id: 'existing-record', name: '已有记录' }
+    await replaceAllData([existing], defaultSettings)
+    const result = await initializeFreshData(createDemoAssets())
+    expect(result.initialized).toBe(false)
+    expect((await loadAssets()).map((asset) => asset.name)).toEqual(['已有记录'])
+  })
+
+  it('clears only examples while retaining other records from the database', async () => {
+    const example = createDemoAssets()[0]
+    const existing = { ...example, id: 'existing-record', name: '已有记录' }
+    await replaceAllData([example, existing], defaultSettings)
+    expect((await clearDemoAssets()).map((asset) => asset.name)).toEqual(['已有记录'])
+    expect((await loadAssets()).map((asset) => asset.name)).toEqual(['已有记录'])
   })
 
   it('hydrates into the primary navigation instead of a blank screen', async () => {
@@ -56,6 +110,12 @@ describe('App startup', () => {
     expect(container.querySelector('.home-mode-carousel')).toBeInTheDocument()
     expect(screen.getByText('累计投入')).toBeInTheDocument()
     expect(screen.getByText('近一年投入')).toBeInTheDocument()
+    const itemPage = container.querySelector('#home-mode-item-page') as HTMLElement
+    expect(within(itemPage).getByText('陪伴最久')).toBeInTheDocument()
+    expect(itemPage.querySelector('.overview-item-name')).toHaveTextContent('家用冰箱')
+    expect(within(itemPage).queryByText('日均持有成本')).not.toBeInTheDocument()
+    expect(within(itemPage).getByRole('button', { name: /工作笔记本.*¥.*\/天/ })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: '计算说明' })).not.toBeInTheDocument()
   })
 
   it('exposes services in the list and remembers the home mode', async () => {
@@ -74,6 +134,8 @@ describe('App startup', () => {
     expect(screen.getByRole('heading', { name: '续费日程' })).toBeInTheDocument()
     expect(screen.getByText('折合月均')).toBeInTheDocument()
     expect(screen.getByText('折合年均')).toBeInTheDocument()
+    expect(screen.getByText('日均服务成本')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: '计算说明' })).not.toBeInTheDocument()
 
     fireEvent.click(screen.getByRole('button', { name: /^清单$/ }))
     expect(homeHost).toHaveAttribute('hidden')
@@ -90,6 +152,31 @@ describe('App startup', () => {
     expect(screen.getByRole('tab', { name: /服务/ })).toHaveAttribute('aria-selected', 'true')
   })
 
+  it('opens and dismisses the sorting menu without retaining it across list types', async () => {
+    render(<App />)
+    fireEvent.click(await screen.findByRole('button', { name: '清单' }, { timeout: 2500 }))
+
+    let trigger = screen.getByRole('button', { name: '日均从高到低' })
+    fireEvent.click(trigger)
+    expect(trigger).toHaveAttribute('aria-expanded', 'true')
+    const listbox = screen.getByRole('listbox', { name: '排序方式' })
+    fireEvent.click(within(listbox).getByRole('option', { name: '拥有日期最新' }))
+    trigger = screen.getByRole('button', { name: '拥有日期最新' })
+    expect(trigger).toHaveAttribute('aria-expanded', 'false')
+
+    fireEvent.click(trigger)
+    fireEvent.pointerDown(screen.getByPlaceholderText('搜索名称或备注'))
+    expect(trigger).toHaveAttribute('aria-expanded', 'false')
+    fireEvent.click(trigger)
+    fireEvent.keyDown(document, { key: 'Escape' })
+    expect(trigger).toHaveAttribute('aria-expanded', 'false')
+    expect(trigger).toHaveFocus()
+
+    fireEvent.click(trigger)
+    fireEvent.click(screen.getByRole('tab', { name: /服务/ }))
+    expect(screen.getByRole('button', { name: '日均从高到低' })).toHaveAttribute('aria-expanded', 'false')
+  })
+
   it('uses the shared top bar and themed confirmation on settings', async () => {
     const { container } = render(<App />)
 
@@ -102,11 +189,26 @@ describe('App startup', () => {
     expect(within(topbar as HTMLElement).queryByText('外观与数据')).not.toBeInTheDocument()
     expect(container.querySelector('.settings-title')).not.toBeInTheDocument()
 
-    fireEvent.click(screen.getByRole('button', { name: '清空示例' }))
+    fireEvent.click(within(container.querySelector('.settings-stack') as HTMLElement).getByRole('button', { name: '清空示例' }))
     const dialog = screen.getByRole('alertdialog', { name: '清空示例数据？' })
     expect(within(dialog).getByText(/只会移除应用自带的示例/)).toBeInTheDocument()
     fireEvent.click(within(dialog).getByRole('button', { name: '取消' }))
     expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
+  })
+
+  it('exposes only the delete confirmation above details and restores each layer on dismissal', async () => {
+    render(<App />)
+    fireEvent.click(await screen.findByRole('button', { name: /工作笔记本.*¥.*\/天/ }, { timeout: 2500 }))
+    const detail = screen.getByRole('dialog', { name: '物品详情' })
+    expect(screen.queryByRole('navigation', { name: '主导航' })).not.toBeInTheDocument()
+    fireEvent.click(within(detail).getByRole('button', { name: '删除' }))
+    const confirm = screen.getByRole('alertdialog')
+    expect(screen.queryByRole('dialog', { name: '物品详情' })).not.toBeInTheDocument()
+    expect(detail.closest('[inert]')).not.toBeNull()
+    fireEvent.click(within(confirm).getByRole('button', { name: '取消' }))
+    expect(screen.getByRole('dialog', { name: '物品详情' })).toBe(detail)
+    fireEvent.click(within(detail).getByRole('button', { name: '关闭' }))
+    expect(await screen.findByRole('navigation', { name: '主导航' })).toBeInTheDocument()
   })
 
   it('opens the matching add form from the service page and allows switching type', async () => {
@@ -156,8 +258,10 @@ describe('App startup', () => {
     expect(itemDialog.querySelector('.category-preview')).not.toBeInTheDocument()
     expect(itemNameLabel.compareDocumentPosition(itemCategoryLabel) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
     const subcategoryPages = itemDialog.querySelectorAll('.subcategory-page')
-    expect(subcategoryPages).toHaveLength(2)
+    expect(subcategoryPages).toHaveLength(4)
     expect(subcategoryPages[0].querySelectorAll('.category-option')).toHaveLength(9)
-    expect(subcategoryPages[1].querySelectorAll('.category-option')).toHaveLength(4)
+    expect(subcategoryPages[1].querySelectorAll('.category-option')).toHaveLength(9)
+    expect(subcategoryPages[2].querySelectorAll('.category-option')).toHaveLength(9)
+    expect(subcategoryPages[3].querySelectorAll('.category-option')).toHaveLength(2)
   })
 })
